@@ -199,7 +199,6 @@ def get_latest_price(ticker: str):
                 if price is not None and not pd.isna(price) and price > 0: return round(float(price), 4)
             except Exception: pass
             try:
-                # 💡 修改此處：強制 auto_adjust=False 以獲取未還原的真實收盤價
                 hist = stock.history(period="1mo", auto_adjust=False)
                 if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
             except Exception: pass
@@ -222,7 +221,6 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
     for sym in candidates:
         try:
             stock = yf.Ticker(sym)
-            # 💡 修改此處：強制 auto_adjust=False 以獲取未還原的真實收盤價
             hist = stock.history(start=start_date, auto_adjust=False)
             if not hist.empty:
                 hist.index = hist.index.tz_localize(None).normalize()
@@ -487,7 +485,6 @@ with st.sidebar:
     
     st.header("新增交易")
     
-    # 清空表單與輸入記憶狀態
     if st.session_state.clear_form:
         st.session_state["name_input"] = ""
         st.session_state["ticker_input"] = ""
@@ -506,7 +503,7 @@ with st.sidebar:
         "元大美債20年": "00679B", "國泰20年美債": "00687B", "群益ESG投等債20+": "00937B",
         "中信高評級公司債": "00772B", "元大投資級公司債": "00720B",
         "元大台灣50正2": "00631L", "富邦台灣加權正2": "00675L", "國泰台灣加權正2": "00663L",
-        "台積電": "2330", "鴻海": "2317", "聯發科": "2454", "廣達": "2382", 
+        "台積電": "2330", "鸿海": "2317", "聯發科": "2454", "廣達": "2382", 
         "台達電": "2308", "中華電": "2412", "日月光投控": "3711", "聯電": "2303", 
         "華碩": "2357", "宏碁": "2353", "技嘉": "2376", "微星": "2377", 
         "緯創": "3231", "緯穎": "6669", "英業達": "2356", "和碩": "4938", 
@@ -1072,6 +1069,9 @@ else:
                     daily_data.loc[d, "shares"] = current_shares
                     daily_data.loc[d, "cost"] = current_cost
                 
+                # 💡 判斷平均成本 (只在有持股時顯示)
+                daily_data["avg_cost"] = daily_data.apply(lambda r: r["cost"] / r["shares"] if r["shares"] > 1e-5 else None, axis=1)
+
                 if not hist_df.empty:
                     daily_data = daily_data.join(hist_df["Close"])
                     daily_data["Close"] = daily_data["Close"].ffill()
@@ -1111,6 +1111,10 @@ else:
                         fig2 = go.Figure()
                         hover_temp2 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>收盤價: %{y:,.2f}<extra></extra>"
                         fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
+                        
+                        # 💡 疊加平均成本線
+                        hover_temp_avg = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>平均成本: %{y:,.2f}<extra></extra>"
+                        fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
                         
                         buys = asset_tx[asset_tx['type'] == '買進'].copy()
                         sells = asset_tx[asset_tx['type'] == '賣出'].copy()
