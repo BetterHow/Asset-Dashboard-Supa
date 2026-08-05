@@ -796,6 +796,7 @@ else:
     history_data = st.session_state.history_snapshots
     if len(history_data) > 0:
         processed_history = []
+        selected_cat = st.session_state.selected_category
         for d_str, data_val in history_data.items():
             if isinstance(data_val, dict) and data_val.get("version") == "v2":
                 d_data = data_val.get(display_currency, data_val.get("TWD"))
