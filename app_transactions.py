@@ -476,9 +476,8 @@ with st.sidebar:
         st.session_state["prev_ticker_input"] = ""
         st.session_state.clear_form = False
 
-    # 💡 建立台股常用名稱轉換字典 (已大幅擴充！包含 ETF、權值股、金控、航運及熱門 KY 股)
+    # 💡 建立台股常用名稱轉換字典 (擴充版：包含正2 ETF)
     TW_STOCK_MAP = {
-        # 常見 ETF
         "元大台灣50": "0050", "元大中型100": "0051", "富邦科技": "0052", 
         "元大高股息": "0056", "富邦台50": "006208", "富邦公司治理": "00692", 
         "元大台灣高息低波": "00713", "國泰永續高股息": "00878", "富邦ESG綠色電力": "00881", 
@@ -486,29 +485,21 @@ with st.sidebar:
         "復華台灣科技優息": "00929", "統一台灣高息動能": "00939", "元大台灣價值高息": "00940",
         "元大美債20年": "00679B", "國泰20年美債": "00687B", "群益ESG投等債20+": "00937B",
         "中信高評級公司債": "00772B", "元大投資級公司債": "00720B",
-        
-        # 權值股與熱門電子股
+        "元大台灣50正2": "00631L", "富邦台灣加權正2": "00675L", "國泰台灣加權正2": "00663L",
         "台積電": "2330", "鴻海": "2317", "聯發科": "2454", "廣達": "2382", 
         "台達電": "2308", "中華電": "2412", "日月光投控": "3711", "聯電": "2303", 
         "華碩": "2357", "宏碁": "2353", "技嘉": "2376", "微星": "2377", 
         "緯創": "3231", "緯穎": "6669", "英業達": "2356", "和碩": "4938", 
         "光寶科": "2301", "研華": "2395", "奇鋐": "3017", "雙鴻": "3324", 
         "智邦": "2345", "瑞昱": "2379", "聯詠": "3034", "國巨": "2327", 
-        "大立光": "3008", "欣興": "3037", "景碩": "3189", "南電": "8046",
-        "精技": "2414",
-
-        # 傳產與航運股
+        "大立光": "3008", "欣興": "3037", "景碩": "3189", "南電": "8046", "精技": "2414",
         "長榮": "2603", "陽明": "2609", "萬海": "2615", "台泥": "1101", 
         "中鋼": "2002", "統一": "1216", "統一超": "2912", "和泰車": "2207", 
         "巨大": "9921", "美利達": "9914",
-
-        # 金控股
         "富邦金": "2881", "國泰金": "2882", "中信金": "2891", "兆豐金": "2886", 
         "玉山金": "2884", "元大金": "2885", "第一金": "2892", "華南金": "2880", 
         "合庫金": "5880", "凱基金": "2883", "台新金": "2887", "永豐金": "2890", 
         "新光金": "2888", "彰銀": "2801", 
-
-        # 常見 KY 股 (海外第一上市)
         "世芯-KY": "3661", "矽力*-KY": "6415", "譜瑞-KY": "4966", "貿聯-KY": "3665", 
         "慧洋-KY": "2636", "臻鼎-KY": "4958", "中租-KY": "5871", "亞德客-KY": "1590", 
         "材料-KY": "4114", "美食-KY": "2723", "鮮活果汁-KY": "1256"
@@ -803,10 +794,13 @@ else:
         col_pie, col_nav = st.columns([0.88, 0.12])
         
         with col_pie:
+            # 💡 在「⚙️ 圖表設定」Popover 中新增「圖表類型」選擇器
             try:
                 with st.popover("⚙️ 圖表設定"):
+                    chart_type_choice = st.selectbox("圖表類型", ["自動 (預設)", "圓餅圖", "長條圖"], index=0, key="chart_type_select")
                     threshold = st.slider("合併佔比小於多少為「其他」？", 0.0, 5.0, 1.0, 0.5, "%.1f%%")
             except AttributeError:
+                chart_type_choice = st.selectbox("圖表類型", ["自動 (預設)", "圓餅圖", "長條圖"], index=0, key="chart_type_select")
                 threshold = st.slider("合併佔比小於多少為「其他」？", 0.0, 5.0, 1.0, 0.5, "%.1f%%")
 
             if plot_df.empty: st.info("請至少選擇一個項目")
@@ -827,7 +821,10 @@ else:
                     bar_text_labels.append(f"<b>{pct_in_view:.1f}%<br>({pct_of_total:.1f}%)</b>" if is_category_view else f"<b>{pct_in_view:.1f}%</b>")
                     pie_text_labels.append(f"<b>{lab}</b><br>{pct_in_view:.1f}%<br>({pct_of_total:.1f}%)" if pct_in_view >= 1.0 and is_category_view else f"<b>{lab}</b><br>{pct_in_view:.1f}%" if pct_in_view >= 1.0 else "")
                 
-                if len(labels) > 10:
+                # 💡 判斷要繪製長條圖還是圓餅圖
+                show_bar_chart = (chart_type_choice == "長條圖") or (chart_type_choice == "自動 (預設)" and len(labels) > 10)
+
+                if show_bar_chart:
                     bar_font_size = 24 if len(labels) <= 12 else 20 if len(labels) <= 15 else 16 if len(labels) <= 20 else 14 if len(labels) <= 30 else 12
                     fig = go.Figure(data=[go.Bar(
                         x=labels, y=values, text=bar_text_labels, textposition="outside", textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
