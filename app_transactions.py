@@ -785,7 +785,7 @@ else:
     if is_category_view:
         view_df = df_chart[df_chart["類型"] == st.session_state.selected_category].copy()
         cat_total_val = fmt_total(view_df['顯示現值'].sum(), display_currency)
-        st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(f'{unit.replace('$', '&#36;')} {cat_total_val}')}", unsafe_allow_html=True)
+        st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(f'{unit.replace("$\", "&#36;")} {cat_total_val}')}", unsafe_allow_html=True)
     else:
         view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
 
@@ -942,10 +942,10 @@ else:
             "股息": detail_df.apply(lambda r: None if r.get("is_cash") else r["股息"], axis=1),
             "SP權利金": detail_df.apply(lambda r: None if r.get("is_cash") else r["SP權利金"], axis=1),
             "CC權利金": detail_df.apply(lambda r: None if r.get("is_cash") else r["CC權利金"], axis=1),
-            "已實現總損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["已實現總損益"], axis=1)
+            "已實現損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1)
         })
 
-        all_cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "現值", "未實現損益", "股息", "SP權利金", "CC權利金", "已實現總損益"]
+        all_cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "現值", "未實現損益", "股息", "SP權利金", "CC權利金", "已實現損益"]
         if is_category_view:
             if st.session_state.selected_category == "美股":
                 display_cols = all_cols
@@ -974,7 +974,7 @@ else:
                 "股息": st.column_config.NumberColumn("股息", format="%.0f"),
                 "SP權利金": st.column_config.NumberColumn("SP權利金", format="%.0f"),
                 "CC權利金": st.column_config.NumberColumn("CC權利金", format="%.0f"),
-                "已實現總損益": st.column_config.NumberColumn("已實現總損益", format="%.0f")
+                "已實現損益": st.column_config.NumberColumn("已實現損益", format="%.0f")
             }
             st.dataframe(show_df, use_container_width=True, hide_index=True, column_config=col_cfg)
 
@@ -1021,7 +1021,6 @@ else:
         )
         
         if selected_analysis_target:
-            # 💡 在進階分析上方新增一個獨立控制權利金/配息扣除的勾選框
             include_premium_individual = st.checkbox("此標的圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False), key="include_premium_ind")
 
             with st.spinner(f"正在載入 {selected_analysis_target} 的歷史資料並回推圖表..."):
@@ -1029,13 +1028,11 @@ else:
                 ticker_to_fetch = asset_tx.iloc[0]["ticker"]
                 asset_currency = asset_tx.iloc[0]["currency"]
                 
-                # 取得歷史價格
                 hist_df = pd.DataFrame()
                 if ticker_to_fetch:
                     start_dt = asset_tx["date_obj"].min() - pd.Timedelta(days=7)
                     hist_df = get_historical_prices_for_chart(ticker_to_fetch, start_dt)
                 
-                # 準備日曆
                 first_trade_date = asset_tx["date_obj"].min()
                 calendar = pd.date_range(start=first_trade_date, end=pd.to_datetime(date.today()))
                 daily_data = pd.DataFrame(index=calendar)
@@ -1066,7 +1063,6 @@ else:
                                     if current_shares < 1e-5:
                                         current_shares, current_cost = 0.0, 0.0
                             elif action in ["Sell Put", "Covered Call", "配息"]:
-                                # 💡 這裡使用個別圖表的專屬勾選框來決定是否扣除
                                 if include_premium_individual:
                                     current_cost -= price
                     
@@ -1089,7 +1085,6 @@ else:
                 
                 c_chart1, c_chart2 = st.columns(2)
                 
-                # ------ 圖表 1: 持倉現值 vs 成本 ------
                 with c_chart1:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
                     fig1 = go.Figure()
@@ -1120,7 +1115,6 @@ else:
                     )
                     st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
-                # ------ 圖表 2: 價格走勢與交易點位 ------
                 with c_chart2:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>🎯 價格走勢與交易點位</div>", unsafe_allow_html=True)
                     if hist_df.empty:
