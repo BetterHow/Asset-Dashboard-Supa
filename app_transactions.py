@@ -134,7 +134,7 @@ st.markdown(
 )
 
 st.title("📊 個人資產儀表板（端到端加密版）")
-st.caption("支援買進 / 賣出 / SP / CC｜動態現金管理｜負債追蹤｜自動快照｜行內編輯｜隱私保護")
+st.caption("支援買進 / 賣出 / SP / CC｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
 
 # 初始化載入資料 (從 Supabase 解密)
 if "transactions" not in st.session_state: st.session_state.transactions = load_data("transactions", [])
@@ -189,6 +189,21 @@ def get_latest_price(ticker: str):
             except Exception: pass
         except Exception: continue
     return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
+    if not ticker: return pd.DataFrame()
+    ticker = ticker.strip().upper()
+    candidates = [f"{ticker}.TW", f"{ticker}.TWO"] if ticker.isdigit() else [ticker] + ([f"{ticker}.TW", f"{ticker}.TWO"] if not ticker.endswith((".TW", ".TWO")) and ticker.isalnum() and not ticker.isalpha() else [])
+    for sym in candidates:
+        try:
+            stock = yf.Ticker(sym)
+            hist = stock.history(start=start_date)
+            if not hist.empty:
+                hist.index = hist.index.tz_localize(None).normalize()
+                return hist
+        except: continue
+    return pd.DataFrame()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_all_prices(tickers: tuple):
@@ -860,6 +875,152 @@ else:
                                     fetch_all_prices.clear()
                                     st.rerun()
                                 else: st.warning("請輸入有效數字")
+
+    # ========================================================
+    # 🔍 個別標的進階分析
+    # ========================================================
+    st.divider()
+    st.subheader("🔍 個別標的進階分析")
+    
+    if st.session_state.transactions:
+        tx_df_analysis = pd.DataFrame(st.session_state.transactions)
+        tx_df_analysis["date_obj"] = pd.to_datetime(tx_df_analysis["date"])
+        tx_df_analysis["target_label"] = tx_df_analysis.apply(lambda row: f"{row['name']} ({row['ticker']})" if row['ticker'] else row['name'], axis=1)
+        
+        target_options_analysis = sorted(tx_df_analysis["target_label"].unique().tolist())
+        selected_analysis_target = st.selectbox(
+            "選擇要分析的標的", 
+            target_options_analysis, 
+            index=None,
+            placeholder="🔍 點擊此處並直接鍵盤輸入代號或名稱搜尋...",
+            label_visibility="collapsed"
+        )
+        
+        if selected_analysis_target:
+            with st.spinner(f"正在載入 {selected_analysis_target} 的歷史資料並回推圖表..."):
+                asset_tx = tx_df_analysis[tx_df_analysis["target_label"] == selected_analysis_target].sort_values("date_obj").copy()
+                ticker_to_fetch = asset_tx.iloc[0]["ticker"]
+                asset_currency = asset_tx.iloc[0]["currency"]
+                
+                # 取得歷史價格
+                hist_df = pd.DataFrame()
+                if ticker_to_fetch:
+                    start_dt = asset_tx["date_obj"].min() - pd.Timedelta(days=7)
+                    hist_df = get_historical_prices_for_chart(ticker_to_fetch, start_dt)
+                
+                # 準備日曆
+                first_trade_date = asset_tx["date_obj"].min()
+                calendar = pd.date_range(start=first_trade_date, end=pd.to_datetime(date.today()))
+                daily_data = pd.DataFrame(index=calendar)
+                daily_data["shares"] = 0.0
+                daily_data["cost"] = 0.0
+                
+                current_shares = 0.0
+                current_cost = 0.0
+                tx_grouped = asset_tx.groupby("date_obj")
+                
+                for d in calendar:
+                    if d in tx_grouped.groups:
+                        day_txs = tx_grouped.get_group(d)
+                        for _, tx in day_txs.iterrows():
+                            qty = float(tx["quantity"])
+                            price = float(tx["price"])
+                            action = tx["type"]
+                            
+                            if action == "買進":
+                                current_shares += qty
+                                current_cost += (qty * price)
+                            elif action == "賣出":
+                                if current_shares > 0:
+                                    avg_p = current_cost / current_shares
+                                    sell_q = min(qty, current_shares)
+                                    current_shares -= sell_q
+                                    current_cost -= (sell_q * avg_p)
+                                    if current_shares < 1e-5:
+                                        current_shares, current_cost = 0.0, 0.0
+                            elif action in ["Sell Put", "Covered Call"]:
+                                if st.session_state.get("include_premium", False):
+                                    current_cost -= price
+                    
+                    daily_data.loc[d, "shares"] = current_shares
+                    daily_data.loc[d, "cost"] = current_cost
+                
+                if not hist_df.empty:
+                    daily_data = daily_data.join(hist_df["Close"])
+                    daily_data["Close"] = daily_data["Close"].ffill()
+                    daily_data["Value"] = daily_data["shares"] * daily_data["Close"]
+                else:
+                    daily_data["Close"] = None
+                    daily_data["Value"] = daily_data["cost"] 
+                
+                st.markdown(f"*(註: 以下圖表皆以該標的原始計價幣別 **{asset_currency}** 呈現，不受匯率波動影響)*")
+                
+                c_chart1, c_chart2 = st.columns(2)
+                
+                # ------ 圖表 1: 持倉現值 vs 成本 ------
+                with c_chart1:
+                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
+                    fig1 = go.Figure()
+                    hover_temp1 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>金額: %{y:,.2f}<extra></extra>"
+                    
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', line=dict(color='#00CC96', width=2), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp1))
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', line=dict(color='#3b82f6', width=2), hovertemplate=hover_temp1))
+                    
+                    fig1.update_layout(
+                        margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d"),
+                        yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
+                        hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                        dragmode="pan"
+                    )
+                    st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
+                
+                # ------ 圖表 2: 價格走勢與交易點位 ------
+                with c_chart2:
+                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>🎯 價格走勢與交易點位</div>", unsafe_allow_html=True)
+                    if hist_df.empty:
+                        st.warning("無法取得此標的之歷史報價，僅能繪製成本變化圖。")
+                    else:
+                        fig2 = go.Figure()
+                        hover_temp2 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>收盤價: %{y:,.2f}<extra></extra>"
+                        fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
+                        
+                        buys = asset_tx[asset_tx['type'] == '買進'].copy()
+                        sells = asset_tx[asset_tx['type'] == '賣出'].copy()
+                        
+                        max_q = asset_tx[asset_tx['type'].isin(['買進', '賣出'])]['quantity'].max()
+                        if pd.isna(max_q) or max_q <= 0: max_q = 1
+                        
+                        def make_hover(row):
+                            if privacy: return "＊＊＊＊"
+                            return f"日期: {row['date']}<br>動作: {row['type']}<br>價格: {row['price']}<br>數量: {row['quantity']}<br>備註: {row['note']}"
+                        
+                        if not buys.empty:
+                            buys['hover'] = buys.apply(make_hover, axis=1)
+                            sizes = [max(8, min(25, (q / max_q) * 25)) for q in buys['quantity']]
+                            fig2.add_trace(go.Scatter(
+                                x=buys['date_obj'], y=buys['price'], mode='markers', name='買進',
+                                marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')),
+                                customdata=buys['hover'], hovertemplate="%{customdata}<extra></extra>"
+                            ))
+                            
+                        if not sells.empty:
+                            sells['hover'] = sells.apply(make_hover, axis=1)
+                            sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
+                            fig2.add_trace(go.Scatter(
+                                x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出',
+                                marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')),
+                                customdata=sells['hover'], hovertemplate="%{customdata}<extra></extra>"
+                            ))
+                            
+                        fig2.update_layout(
+                            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            xaxis=dict(showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d"),
+                            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
+                            hovermode="closest", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                            dragmode="pan"
+                        )
+                        st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
     st.divider()
     st.subheader("交易紀錄管理")
