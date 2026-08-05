@@ -199,7 +199,8 @@ def get_latest_price(ticker: str):
                 if price is not None and not pd.isna(price) and price > 0: return round(float(price), 4)
             except Exception: pass
             try:
-                hist = stock.history(period="1mo")
+                # 💡 修改此處：強制 auto_adjust=False 以獲取未還原的真實收盤價
+                hist = stock.history(period="1mo", auto_adjust=False)
                 if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
             except Exception: pass
         except Exception: continue
@@ -221,7 +222,8 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
     for sym in candidates:
         try:
             stock = yf.Ticker(sym)
-            hist = stock.history(start=start_date)
+            # 💡 修改此處：強制 auto_adjust=False 以獲取未還原的真實收盤價
+            hist = stock.history(start=start_date, auto_adjust=False)
             if not hist.empty:
                 hist.index = hist.index.tz_localize(None).normalize()
                 return hist
@@ -551,7 +553,6 @@ with st.sidebar:
         st.session_state["prev_ticker_input"] = current_ticker
         st.session_state["prev_name_input"] = st.session_state.get("name_input", "")
 
-    # 💡 加入「配息」動作
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"], key="action_radio")
     name = st.text_input("資產名稱", key="name_input")
     ticker = st.text_input("代號", key="ticker_input")
@@ -601,7 +602,6 @@ with st.sidebar:
             market_price = get_latest_price(str(ticker))
             if market_price: price = market_price
                 
-        # 💡 將配息加入需要判定數量的動作中
         is_premium_action = action in ["Sell Put", "Covered Call", "配息"]
         valid_qty = (qty is not None and qty >= 0) if is_premium_action else (qty is not None and qty > 0)
         valid_price = (price is not None) if is_premium_action else (price is not None and price >= 0)
@@ -644,7 +644,6 @@ else:
             h["平均成本"] = 1.0
             h["調整後成本"] = 1.0
         else:
-            # 💡 調整後成本減去所有已回收資金（包含股息）
             eff_cost = h["原始總成本"]
             adj_total_cost = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"]
             if st.session_state.get("include_premium", False):
@@ -747,7 +746,6 @@ else:
         st.session_state.display_currency = new_currency
         st.rerun()
 
-    # 💡 修改複選框文字
     st.checkbox("損益含權利金/配息", key="include_premium")
 
     m1, m2, m3, m4 = st.columns(4)
@@ -950,7 +948,6 @@ else:
             "已實現總損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1)
         })
 
-        # 💡 動態欄位顯示邏輯：根據所選類別過除不需要的欄位
         all_cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "現值", "未實現損益", "股息", "SP權利金", "CC權利金", "已實現總損益"]
         if is_category_view:
             if st.session_state.selected_category == "美股":
