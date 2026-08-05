@@ -540,7 +540,19 @@ with st.sidebar:
     ticker_val = str(ticker).strip().upper()
     
     if ticker_val != st.session_state.prev_ticker:
-        st.session_state["type_select"] = "台股" if ticker_val.isdigit() or ticker_val.endswith((".TW", ".TWO")) else "加密貨幣" if "-USD" in ticker_val else "美股" if ticker_val.isalpha() else "其他"
+        # 💡 自動判斷：偵測到純數字 + B (如 00679B) 自動判定為「債券」並預設為「TWD」
+        clean_t = ticker_val.replace(".TW", "").replace(".TWO", "")
+        if clean_t.endswith("B") and len(clean_t) > 1 and clean_t[:-1].isdigit():
+            st.session_state["type_select"] = "債券"
+        elif ticker_val.isdigit() or ticker_val.endswith((".TW", ".TWO")):
+            st.session_state["type_select"] = "台股"
+        elif "-USD" in ticker_val:
+            st.session_state["type_select"] = "加密貨幣"
+        elif ticker_val.isalpha():
+            st.session_state["type_select"] = "美股"
+        else:
+            st.session_state["type_select"] = "其他"
+
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = ticker_val
 
