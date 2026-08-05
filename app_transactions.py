@@ -374,7 +374,9 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
             lib_total_display = lib_df["顯示金額"].sum()
 
         safe_unit = unit.replace("$", "&#36;")
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(f'{safe_unit} {fmt_total(lib_total_display, display_currency)}')} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(f'{total_value / net_value:.2f} 倍' if net_value > 0 else 'N/A')}</span></div>", unsafe_allow_html=True)
+        lib_str = f"{safe_unit} {fmt_total(lib_total_display, display_currency)}"
+        lev_str = f"{total_value / net_value:.2f} 倍" if net_value > 0 else 'N/A'
+        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(lib_str)} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(lev_str)}</span></div>", unsafe_allow_html=True)
         
         with st.form("liability_form", clear_on_submit=True):
             c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
@@ -785,7 +787,8 @@ else:
     if is_category_view:
         view_df = df_chart[df_chart["類型"] == st.session_state.selected_category].copy()
         cat_total_val = fmt_total(view_df['顯示現值'].sum(), display_currency)
-        st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(f'{unit.replace("$\", "&#36;")} {cat_total_val}')}", unsafe_allow_html=True)
+        cat_total_str = f"{unit.replace('$', '&#36;')} {cat_total_val}"
+        st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(cat_total_str)}", unsafe_allow_html=True)
     else:
         view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
 
