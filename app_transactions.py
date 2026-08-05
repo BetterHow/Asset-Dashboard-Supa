@@ -124,8 +124,13 @@ st.markdown(
     """
     <style>
     section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
-    button[kind="header"], div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] {
-        position: fixed !important; top: 10px !important; z-index: 999999;
+    
+    /* 僅將側邊欄收折/展開按鈕設定為固定，避免誤傷右上角系統選單 */
+    div[data-testid="collapsedControl"], 
+    button[data-testid="stSidebarCollapseButton"] {
+        position: fixed !important; 
+        top: 10px !important; 
+        z-index: 999999;
     }
     div[data-testid="stButton"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
@@ -538,7 +543,7 @@ with st.sidebar:
 
     currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
     quantity_str = st.text_input("數量", placeholder="輸入數量 (SP/CC 可輸入 0)", key="qty_input")
-    price_str = st.text_input(f"價格（{currency}）", value="", placeholder="輸入價格/總權利金", key="price_input")
+    price_str = st.text_input(f"價格（{currency}）", value="", placeholder="輸入價格/總權利金 (留白將自動抓價)", key="price_input")
     trade_date = st.date_input("交易日期", value=date.today(), key="date_input")
     note = st.text_input("備註", value="", key="note_input")
 
@@ -551,7 +556,7 @@ with st.sidebar:
                 
         is_premium_action = action in ["Sell Put", "Covered Call"]
         valid_qty = (qty is not None and qty >= 0) if is_premium_action else (qty is not None and qty > 0)
-        valid_price = (price is not None) if is_premium_action else (price is not None and price > 0)
+        valid_price = (price is not None) if is_premium_action else (price is not None and price >= 0)
         
         if name and valid_qty and valid_price:
             new_tx = {
@@ -566,7 +571,7 @@ with st.sidebar:
             save_data("transactions", st.session_state.transactions)
             fetch_all_prices.clear()
             st.rerun()
-        else: st.warning("請正確填寫。買進賣出價格需大於 0；SP/CC 數量可為 0，且價格可輸入負數表示平倉買回。")
+        else: st.warning("請正確填寫。買進賣出價格需大於等於 0（配股請填 0）；SP/CC 數量可為 0，且價格可輸入負數表示平倉買回。")
 
     st.divider()
     st.caption(f"交易紀錄：{len(st.session_state.transactions)} 筆")
