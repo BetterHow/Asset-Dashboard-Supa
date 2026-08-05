@@ -414,14 +414,17 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                 if len(history_data) > 0:
                     lib_hist = []
                     for d_str, data_val in history_data.items():
-                        liab = data_val.get("liability", 0.0) if isinstance(data_val, dict) else 0.0
-                        lib_hist.append({'Date': d_str, 'TWD_Liability': liab})
+                        if isinstance(data_val, dict) and data_val.get("version") == "v2":
+                            liab_val = data_val.get(display_currency, data_val.get("TWD")).get("liability", 0.0)
+                            lib_hist.append({'Date': d_str, 'Value': liab_val})
+                        else:
+                            liab = data_val.get("liability", 0.0) if isinstance(data_val, dict) else 0.0
+                            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+                            lib_hist.append({'Date': d_str, 'Value': liab / div})
+                            
                     lib_hist_df = pd.DataFrame(lib_hist)
                     lib_hist_df['Date'] = pd.to_datetime(lib_hist_df['Date'])
                     lib_hist_df = lib_hist_df.sort_values('Date')
-                    if display_currency == "TWD": lib_hist_df['Value'] = lib_hist_df['TWD_Liability']
-                    elif display_currency == "USD": lib_hist_df['Value'] = lib_hist_df['TWD_Liability'] / usd_twd
-                    elif display_currency == "BTC": lib_hist_df['Value'] = (lib_hist_df['TWD_Liability'] / usd_twd) / btc_usd if btc_usd else lib_hist_df['TWD_Liability']
 
                     if not lib_hist_df.empty:
                         fig_lib_line = go.Figure()
@@ -613,15 +616,29 @@ else:
     net_pnl = net_value - net_cost
     net_pnl_pct = (net_pnl / net_cost * 100) if net_cost > 0 else 0
 
-    cat_snapshots = {}
-    for cat, group in df.groupby("類型"):
-        cat_val_twd = sum(get_twd_value(r["現值"], r["幣別"]) for _, r in group.iterrows())
-        cat_cost_twd = sum(get_twd_value(r["總成本"], r["幣別"]) for _, r in group.iterrows())
-        cat_snapshots[cat] = {"value": round(cat_val_twd, 2), "cost": round(cat_cost_twd, 2)}
+    def get_val_in_cur(val, from_cur, to_cur):
+        if from_cur == "TWD": usd_val = val / usd_twd
+        elif from_cur == "USD": usd_val = val
+        elif from_cur == "BTC": usd_val = val * btc_usd if btc_usd else 0
+        else: usd_val = val
+        if to_cur == "TWD": return usd_val * usd_twd
+        elif to_cur == "USD": return usd_val
+        elif to_cur == "BTC": return usd_val / btc_usd if btc_usd else 0
+        return val
+
+    new_snapshot = {"version": "v2"}
+    for d_cur in ["TWD", "USD", "BTC"]:
+        cur_val = sum(get_val_in_cur(row["現值"], row["幣別"], d_cur) for _, row in df.iterrows())
+        cur_cost = sum(get_val_in_cur(row["總成本"], row["幣別"], d_cur) for _, row in df.iterrows())
+        cur_liab = sum(get_val_in_cur(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
+        cat_snaps = {}
+        for cat, group in df.groupby("類型"):
+            cat_v = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in group.iterrows())
+            cat_c = sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in group.iterrows())
+            cat_snaps[cat] = {"value": round(cat_v, 2), "cost": round(cat_c, 2)}
+        new_snapshot[d_cur] = {"value": round(cur_val, 2), "cost": round(cur_cost, 2), "liability": round(cur_liab, 2), "categories": cat_snaps}
 
     today_str = date.today().isoformat()
-    new_snapshot = {"value": round(total_twd_snapshot, 2), "cost": round(total_cost_twd_snapshot, 2), "liability": round(total_liability_twd, 2), "categories": cat_snapshots}
-    
     if today_str not in st.session_state.history_snapshots or st.session_state.history_snapshots[today_str] != new_snapshot:
         st.session_state.history_snapshots[today_str] = new_snapshot
         save_data("history_snapshots", st.session_state.history_snapshots)
@@ -780,17 +797,29 @@ else:
     if len(history_data) > 0:
         processed_history = []
         for d_str, data_val in history_data.items():
-            val, cost, liability = (data_val.get("value", 0), data_val.get("cost", 0), data_val.get("liability", 0.0)) if isinstance(data_val, dict) else (data_val, data_val, 0.0)
-            cats = data_val.get("categories", {}) if isinstance(data_val, dict) else {}
-            v, c = (val - liability, cost - liability) if st.session_state.selected_category is None else (cats.get(st.session_state.selected_category, {}).get("value", 0), cats.get(st.session_state.selected_category, {}).get("cost", 0))
-            processed_history.append({'Date': d_str, 'TWD_Value': v, 'TWD_Cost': c})
+            if isinstance(data_val, dict) and data_val.get("version") == "v2":
+                d_data = data_val.get(display_currency, data_val.get("TWD"))
+                val = d_data.get("value", 0)
+                cost = d_data.get("cost", 0)
+                liability = d_data.get("liability", 0.0)
+                cats = d_data.get("categories", {})
+                v = val - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("value", 0)
+                c = cost - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("cost", 0)
+            else:
+                val = data_val.get("value", 0) if isinstance(data_val, dict) else data_val
+                cost = data_val.get("cost", 0) if isinstance(data_val, dict) else data_val
+                liability = data_val.get("liability", 0.0) if isinstance(data_val, dict) else 0.0
+                cats = data_val.get("categories", {}) if isinstance(data_val, dict) else {}
+                twd_v = val - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("value", 0)
+                twd_c = cost - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("cost", 0)
+                div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+                v, c = twd_v / div, twd_c / div
+
+            processed_history.append({'Date': d_str, 'Value': v, 'Cost': c})
 
         hist_df = pd.DataFrame(processed_history)
         hist_df['Date'] = pd.to_datetime(hist_df['Date'])
         hist_df = hist_df.sort_values('Date')
-        
-        div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
-        hist_df['Value'], hist_df['Cost'] = hist_df['TWD_Value'] / div, hist_df['TWD_Cost'] / div
 
         time_range = st.radio("選擇時間區間", ["1個月", "3個月", "半年", "1年", "全部"], horizontal=True, label_visibility="collapsed", key="trend_time_range")
         today_dt = pd.to_datetime(date.today())
