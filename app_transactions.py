@@ -478,6 +478,17 @@ with st.sidebar:
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = ticker_val
 
+        # 💡 動態預填價格：打完代號後自動查詢報價並顯示在價格欄位
+        if len(ticker_val) >= 2:
+            with st.spinner("抓取最新報價中..."):
+                fetched_price = get_latest_price(ticker_val)
+                if fetched_price:
+                    st.session_state["price_input"] = str(fetched_price)
+                else:
+                    st.session_state["price_input"] = ""
+        else:
+            st.session_state["price_input"] = ""
+
     asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
     if asset_type != st.session_state.prev_type:
         st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
