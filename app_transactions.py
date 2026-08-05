@@ -155,6 +155,8 @@ if "clear_form" not in st.session_state: st.session_state.clear_form = False
 if "privacy_mode" not in st.session_state: st.session_state.privacy_mode = False
 if "prev_ticker" not in st.session_state: st.session_state.prev_ticker = ""
 if "prev_type" not in st.session_state: st.session_state.prev_type = "台股"
+if "prev_name_input" not in st.session_state: st.session_state.prev_name_input = ""
+if "prev_ticker_input" not in st.session_state: st.session_state.prev_ticker_input = ""
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_rate(symbol: str):
@@ -458,21 +460,61 @@ with st.sidebar:
     st.divider()
     
     st.header("新增交易")
+    
+    # 清空表單與輸入記憶狀態
     if st.session_state.clear_form:
         st.session_state["name_input"] = ""
         st.session_state["ticker_input"] = ""
         st.session_state["qty_input"] = ""
         st.session_state["price_input"] = ""
+        st.session_state["prev_name_input"] = ""
+        st.session_state["prev_ticker_input"] = ""
         st.session_state.clear_form = False
+
+    # 💡 建立台股常用名稱轉換字典 (可隨時自行新增擴充)
+    TW_STOCK_MAP = {
+        "精技": "2414", "台積電": "2330", "鴻海": "2317", "聯發科": "2454", 
+        "廣達": "2382", "緯創": "3231", "長榮": "2603", "陽明": "2609", 
+        "富邦金": "2881", "國泰金": "2882", "中信金": "2891", "兆豐金": "2886", 
+        "中華電": "2412", "台達電": "2308", "華碩": "2353", "技嘉": "2357",
+        "元大台灣50": "0050", "元大高股息": "0056", "國泰永續高股息": "00878", 
+        "群益台灣精選高息": "00919", "復華台灣科技優息": "00929"
+    }
+    REVERSE_MAP = {v: k for k, v in TW_STOCK_MAP.items()}
+
+    # 雙向聯動邏輯：在渲染前檢查狀態
+    current_name = st.session_state.get("name_input", "")
+    current_ticker = st.session_state.get("ticker_input", "")
+
+    if current_name != st.session_state.get("prev_name_input", ""):
+        clean_name = current_name.strip()
+        auto_ticker = None
+        if clean_name in TW_STOCK_MAP:
+            auto_ticker = TW_STOCK_MAP[clean_name]
+        elif looks_like_ticker(clean_name):
+            tmp_ticker = clean_name.upper()
+            crypto_map = {"BTC": "BTC-USD", "ETH": "ETH-USD", "ADA": "ADA-USD", "SOL": "SOL-USD", "DOGE": "DOGE-USD", "SUI": "SUI-USD"}
+            auto_ticker = crypto_map.get(tmp_ticker, tmp_ticker)
+            
+        if auto_ticker:
+            st.session_state["ticker_input"] = auto_ticker
+            
+        st.session_state["prev_name_input"] = current_name
+        st.session_state["prev_ticker_input"] = st.session_state.get("ticker_input", "")
+
+    elif current_ticker != st.session_state.get("prev_ticker_input", ""):
+        clean_ticker = current_ticker.strip().upper()
+        if clean_ticker in REVERSE_MAP:
+            st.session_state["name_input"] = REVERSE_MAP[clean_ticker]
+            
+        st.session_state["prev_ticker_input"] = current_ticker
+        st.session_state["prev_name_input"] = st.session_state.get("name_input", "")
 
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call"], key="action_radio")
     name = st.text_input("資產名稱", key="name_input")
-    if name and looks_like_ticker(name):
-        auto_ticker = {"BTC": "BTC-USD", "ETH": "ETH-USD", "ADA": "ADA-USD", "SOL": "SOL-USD", "DOGE": "DOGE-USD", "SUI": "SUI-USD"}.get(name.strip().upper(), name.strip().upper())
-        if st.session_state.get("ticker_input", "") != auto_ticker: st.session_state["ticker_input"] = auto_ticker
-            
     ticker = st.text_input("代號", key="ticker_input")
     ticker_val = str(ticker).strip().upper()
+    
     if ticker_val != st.session_state.prev_ticker:
         st.session_state["type_select"] = "台股" if ticker_val.isdigit() or ticker_val.endswith((".TW", ".TWO")) else "加密貨幣" if "-USD" in ticker_val else "美股" if ticker_val.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
