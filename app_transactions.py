@@ -942,7 +942,7 @@ else:
             "股息": detail_df.apply(lambda r: None if r.get("is_cash") else r["股息"], axis=1),
             "SP權利金": detail_df.apply(lambda r: None if r.get("is_cash") else r["SP權利金"], axis=1),
             "CC權利金": detail_df.apply(lambda r: None if r.get("is_cash") else r["CC權利金"], axis=1),
-            "已實現總損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1)
+            "已實現總損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["已實現總損益"], axis=1)
         })
 
         all_cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "現值", "未實現損益", "股息", "SP權利金", "CC權利金", "已實現總損益"]
@@ -1021,6 +1021,9 @@ else:
         )
         
         if selected_analysis_target:
+            # 💡 在進階分析上方新增一個獨立控制權利金/配息扣除的勾選框
+            include_premium_individual = st.checkbox("此標的圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False), key="include_premium_ind")
+
             with st.spinner(f"正在載入 {selected_analysis_target} 的歷史資料並回推圖表..."):
                 asset_tx = tx_df_analysis[tx_df_analysis["target_label"] == selected_analysis_target].sort_values("date_obj").copy()
                 ticker_to_fetch = asset_tx.iloc[0]["ticker"]
@@ -1063,7 +1066,8 @@ else:
                                     if current_shares < 1e-5:
                                         current_shares, current_cost = 0.0, 0.0
                             elif action in ["Sell Put", "Covered Call", "配息"]:
-                                if st.session_state.get("include_premium", False):
+                                # 💡 這裡使用個別圖表的專屬勾選框來決定是否扣除
+                                if include_premium_individual:
                                     current_cost -= price
                     
                     daily_data.loc[d, "shares"] = current_shares
@@ -1094,7 +1098,6 @@ else:
                         hover_val = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
                         hover_cost = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
                     else:
-                        # 💡 將這兩個標籤的值改為 %{y:,.0f}，拿掉小數點
                         hover_val = "%{x|%Y-%m-%d}<br>金額: %{y:,.0f}<br>損益金額: %{customdata:,.0f}<extra></extra>"
                         hover_cost = "%{x|%Y-%m-%d}<br>金額: %{y:,.0f}<extra></extra>"
                     
