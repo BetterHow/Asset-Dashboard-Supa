@@ -503,7 +503,7 @@ with st.sidebar:
         "元大美債20年": "00679B", "國泰20年美債": "00687B", "群益ESG投等債20+": "00937B",
         "中信高評級公司債": "00772B", "元大投資級公司債": "00720B",
         "元大台灣50正2": "00631L", "富邦台灣加權正2": "00675L", "國泰台灣加權正2": "00663L",
-        "台積電": "2330", "鸿海": "2317", "聯發科": "2454", "廣達": "2382", 
+        "台積電": "2330", "鴻海": "2317", "聯發科": "2454", "廣達": "2382", 
         "台達電": "2308", "中華電": "2412", "日月光投控": "3711", "聯電": "2303", 
         "華碩": "2357", "宏碁": "2353", "技嘉": "2376", "微星": "2377", 
         "緯創": "3231", "緯穎": "6669", "英業達": "2356", "和碩": "4938", 
@@ -1069,7 +1069,6 @@ else:
                     daily_data.loc[d, "shares"] = current_shares
                     daily_data.loc[d, "cost"] = current_cost
                 
-                # 💡 判斷平均成本 (只在有持股時顯示)
                 daily_data["avg_cost"] = daily_data.apply(lambda r: r["cost"] / r["shares"] if r["shares"] > 1e-5 else None, axis=1)
 
                 if not hist_df.empty:
@@ -1080,6 +1079,8 @@ else:
                     daily_data["Close"] = None
                     daily_data["Value"] = daily_data["cost"] 
                 
+                daily_data["pnl"] = daily_data["Value"] - daily_data["cost"]
+
                 st.markdown(f"*(註: 以下圖表皆以該標的原始計價幣別 **{asset_currency}** 呈現，不受匯率波動影響)*")
                 
                 c_chart1, c_chart2 = st.columns(2)
@@ -1088,10 +1089,24 @@ else:
                 with c_chart1:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
                     fig1 = go.Figure()
-                    hover_temp1 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>金額: %{y:,.2f}<extra></extra>"
                     
-                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', line=dict(color='#00CC96', width=2), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp1))
-                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', line=dict(color='#3b82f6', width=2), hovertemplate=hover_temp1))
+                    if privacy:
+                        hover_val = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
+                        hover_cost = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
+                    else:
+                        # 💡 將這兩個標籤的值改為 %{y:,.0f}，拿掉小數點
+                        hover_val = "%{x|%Y-%m-%d}<br>金額: %{y:,.0f}<br>損益金額: %{customdata:,.0f}<extra></extra>"
+                        hover_cost = "%{x|%Y-%m-%d}<br>金額: %{y:,.0f}<extra></extra>"
+                    
+                    fig1.add_trace(go.Scatter(
+                        x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', 
+                        line=dict(color='#00CC96', width=2), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', 
+                        customdata=daily_data['pnl'], hovertemplate=hover_val
+                    ))
+                    fig1.add_trace(go.Scatter(
+                        x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', 
+                        line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
+                    ))
                     
                     fig1.update_layout(
                         margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -1112,7 +1127,6 @@ else:
                         hover_temp2 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>收盤價: %{y:,.2f}<extra></extra>"
                         fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
                         
-                        # 💡 疊加平均成本線
                         hover_temp_avg = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>平均成本: %{y:,.2f}<extra></extra>"
                         fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
                         
