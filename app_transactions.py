@@ -133,79 +133,49 @@ st.markdown(
     """, unsafe_allow_html=True
 )
 
-st.title("📊 個人資產儀表板（交易紀錄版）")
-st.caption("支援買進 / 賣出｜動態現金管理｜負債追蹤｜自動快照｜行內編輯｜隱私保護")
+st.title("📊 個人資產儀表板（端到端加密版）")
+st.caption("支援買進 / 賣出 / SP / CC｜動態現金管理｜負債追蹤｜自動快照｜行內編輯｜隱私保護")
 
 # 初始化載入資料 (從 Supabase 解密)
-if "transactions" not in st.session_state:
-    st.session_state.transactions = load_data("transactions", [])
-if "manual_prices" not in st.session_state:
-    st.session_state.manual_prices = load_data("manual_prices", {})
-if "cash_accounts" not in st.session_state:
-    st.session_state.cash_accounts = load_data("cash_accounts", [])
-if "liabilities_accounts" not in st.session_state:
-    st.session_state.liabilities_accounts = load_data("liabilities_accounts", [])
-if "history_snapshots" not in st.session_state:
-    st.session_state.history_snapshots = load_data("history_snapshots", {})
+if "transactions" not in st.session_state: st.session_state.transactions = load_data("transactions", [])
+if "manual_prices" not in st.session_state: st.session_state.manual_prices = load_data("manual_prices", {})
+if "cash_accounts" not in st.session_state: st.session_state.cash_accounts = load_data("cash_accounts", [])
+if "liabilities_accounts" not in st.session_state: st.session_state.liabilities_accounts = load_data("liabilities_accounts", [])
+if "history_snapshots" not in st.session_state: st.session_state.history_snapshots = load_data("history_snapshots", {})
 
 # 狀態管理
-if "selected_category" not in st.session_state:
-    st.session_state.selected_category = None
-if "editing_id" not in st.session_state:
-    st.session_state.editing_id = None
-if "edit_cash_id" not in st.session_state:
-    st.session_state.edit_cash_id = None
-if "edit_liability_id" not in st.session_state:
-    st.session_state.edit_liability_id = None
-if "display_currency" not in st.session_state:
-    st.session_state.display_currency = "TWD"
-if "selected_extras" not in st.session_state:
-    st.session_state.selected_extras = []
-if "visible_items" not in st.session_state:
-    st.session_state.visible_items = set()
-if "clear_form" not in st.session_state:
-    st.session_state.clear_form = False
-if "privacy_mode" not in st.session_state:
-    st.session_state.privacy_mode = False
-if "prev_ticker" not in st.session_state:
-    st.session_state.prev_ticker = ""
-if "prev_type" not in st.session_state:
-    st.session_state.prev_type = "台股"
+if "selected_category" not in st.session_state: st.session_state.selected_category = None
+if "editing_id" not in st.session_state: st.session_state.editing_id = None
+if "edit_cash_id" not in st.session_state: st.session_state.edit_cash_id = None
+if "edit_liability_id" not in st.session_state: st.session_state.edit_liability_id = None
+if "display_currency" not in st.session_state: st.session_state.display_currency = "TWD"
+if "selected_extras" not in st.session_state: st.session_state.selected_extras = []
+if "visible_items" not in st.session_state: st.session_state.visible_items = set()
+if "clear_form" not in st.session_state: st.session_state.clear_form = False
+if "privacy_mode" not in st.session_state: st.session_state.privacy_mode = False
+if "prev_ticker" not in st.session_state: st.session_state.prev_ticker = ""
+if "prev_type" not in st.session_state: st.session_state.prev_type = "台股"
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_rate(symbol: str):
     try:
         t = yf.Ticker(symbol)
         rate = t.fast_info.get("last_price")
-        if rate:
-            return round(float(rate), 4)
+        if rate: return round(float(rate), 4)
         hist = t.history(period="5d")
-        if not hist.empty:
-            return round(float(hist["Close"].dropna().iloc[-1]), 4)
-    except Exception:
-        pass
+        if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
+    except Exception: pass
     return None
 
 usd_twd = get_rate("USDTWD=X") or 32.4
 btc_usd = get_rate("BTC-USD") or 95000.0
 
-EXTRA_RATES = {
-    "EUR/TWD": "EURTWD=X",
-    "JPY/TWD": "JPYTWD=X",
-    "GBP/TWD": "GBPTWD=X",
-    "BTC/USD": "BTC-USD",
-    "ETH/USD": "ETH-USD",
-}
+EXTRA_RATES = {"EUR/TWD": "EURTWD=X", "JPY/TWD": "JPYTWD=X", "GBP/TWD": "GBPTWD=X", "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD"}
 
 def get_latest_price(ticker: str):
     if not ticker: return None
     ticker = ticker.strip().upper()
-    candidates = []
-    if ticker.isdigit(): candidates = [f"{ticker}.TW", f"{ticker}.TWO"]
-    else:
-        candidates = [ticker]
-        if not ticker.endswith((".TW", ".TWO")) and ticker.isalnum() and not ticker.isalpha():
-            candidates += [f"{ticker}.TW", f"{ticker}.TWO"]
+    candidates = [f"{ticker}.TW", f"{ticker}.TWO"] if ticker.isdigit() else [ticker] + ([f"{ticker}.TW", f"{ticker}.TWO"] if not ticker.endswith((".TW", ".TWO")) and ticker.isalnum() and not ticker.isalpha() else [])
     for sym in candidates:
         try:
             stock = yf.Ticker(sym)
@@ -227,11 +197,8 @@ def fetch_all_prices(tickers: tuple):
         future_to_ticker = {executor.submit(get_latest_price, t): t for t in tickers}
         for future in concurrent.futures.as_completed(future_to_ticker):
             t = future_to_ticker[future]
-            try:
-                price = future.result()
-                results[t] = price
-            except Exception:
-                results[t] = None
+            try: results[t] = future.result()
+            except Exception: results[t] = None
     return results
 
 def calculate_holdings(transactions):
@@ -240,26 +207,49 @@ def calculate_holdings(transactions):
         key = t.get("ticker") or t.get("name")
         if not key: continue
         if key not in holdings:
-            holdings[key] = {"名稱": t.get("name", key), "代號": t.get("ticker", ""), "幣別": t.get("currency", "TWD"), "類型": t.get("type_category", "其他"), "數量": 0.0, "總成本": 0.0}
-        qty = float(t["quantity"])
-        price = float(t["price"])
+            holdings[key] = {
+                "名稱": t.get("name", key), "代號": t.get("ticker", ""), "幣別": t.get("currency", "TWD"),
+                "類型": t.get("type_category", "其他"), "數量": 0.0, "原始總成本": 0.0,
+                "CC權利金": 0.0, "SP權利金": 0.0, "已實現損益": 0.0
+            }
+        qty = float(t.get("quantity", 0))
+        price = float(t.get("price", 0))
+        
+        if t["type"] in ["Sell Put", "Covered Call"] and qty == 0:
+            amount = price
+        else:
+            amount = qty * price
+            
         if t["type"] == "買進":
             holdings[key]["數量"] += qty
-            holdings[key]["總成本"] += qty * price
+            holdings[key]["原始總成本"] += amount
         elif t["type"] == "賣出":
             if holdings[key]["數量"] > 0:
-                avg_cost = holdings[key]["總成本"] / holdings[key]["數量"] if holdings[key]["數量"] > 0 else 0
+                avg_cost = holdings[key]["原始總成本"] / holdings[key]["數量"] if holdings[key]["數量"] > 0 else 0
                 sell_qty = min(qty, holdings[key]["數量"])
                 holdings[key]["數量"] -= sell_qty
-                holdings[key]["總成本"] -= sell_qty * avg_cost
+                cost_deducted = sell_qty * avg_cost
+                holdings[key]["原始總成本"] -= cost_deducted
+                holdings[key]["已實現損益"] += (amount - cost_deducted)
                 if holdings[key]["數量"] < 1e-5:
                     holdings[key]["數量"] = 0.0
-                    holdings[key]["總成本"] = 0.0
+                    holdings[key]["原始總成本"] = 0.0
+        elif t["type"] == "Covered Call":
+            holdings[key]["CC權利金"] += amount
+            holdings[key]["已實現損益"] += amount
+        elif t["type"] == "Sell Put":
+            holdings[key]["SP權利金"] += amount
+            holdings[key]["已實現損益"] += amount
+
     result = []
     for key, h in holdings.items():
-        if h["數量"] > 0.0001:
-            avg_cost = h["總成本"] / h["數量"] if h["數量"] > 0 else 0
-            result.append({"名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"], "數量": round(h["數量"], 6), "平均成本": round(avg_cost, 4), "總成本": round(h["總成本"], 2), "is_cash": False})
+        if h["數量"] > 0.0001 or h["CC權利金"] > 0 or h["SP權利金"] > 0 or h["已實現損益"] != 0:
+            result.append({
+                "名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"],
+                "數量": round(h["數量"], 6), "原始總成本": round(h["原始總成本"], 2),
+                "CC權利金": round(h["CC權利金"], 2), "SP權利金": round(h["SP權利金"], 2),
+                "已實現損益": round(h["已實現損益"], 2), "is_cash": False
+            })
     return result
 
 def safe_float(text):
@@ -280,8 +270,7 @@ def looks_like_ticker(text: str) -> bool:
     if not text: return False
     return bool(re.fullmatch(r"[A-Z0-9.\-]{1,15}", text.strip().upper()))
 
-def mask_val(val_str):
-    return "＊＊＊＊" if st.session_state.privacy_mode else val_str
+def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
 def render_cash_manager():
     st.markdown("#### 💵 現金帳戶管理")
@@ -297,9 +286,7 @@ def render_cash_manager():
             if new_cash_name and new_cash_bal:
                 bal = safe_float(new_cash_bal)
                 if bal is not None:
-                    st.session_state.cash_accounts.append({
-                        "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": new_cash_name.strip(), "currency": new_cash_curr, "balance": bal
-                    })
+                    st.session_state.cash_accounts.append({"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": new_cash_name.strip(), "currency": new_cash_curr, "balance": bal})
                     save_data("cash_accounts", st.session_state.cash_accounts)
                     st.success("已成功新增現金帳戶！")
                     st.rerun()
@@ -314,10 +301,8 @@ def render_cash_manager():
                 new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"curr_{acc['id']}", label_visibility="collapsed")
                 new_bal = c3.text_input("餘額", str(acc["balance"]), key=f"bal_{acc['id']}", label_visibility="collapsed")
                 if c4.button("儲存", key=f"save_{acc['id']}", type="primary", use_container_width=True):
-                    acc["name"] = new_name.strip() if new_name.strip() else acc["name"]
-                    acc["currency"] = new_curr
-                    bal = safe_float(new_bal)
-                    if bal is not None: acc["balance"] = bal
+                    acc["name"], acc["currency"] = new_name.strip() if new_name.strip() else acc["name"], new_curr
+                    if safe_float(new_bal) is not None: acc["balance"] = safe_float(new_bal)
                     save_data("cash_accounts", st.session_state.cash_accounts)
                     st.session_state.edit_cash_id = None
                     st.rerun()
@@ -342,19 +327,13 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
         lib_total_display = 0
         lib_df = pd.DataFrame()
         if st.session_state.liabilities_accounts:
-            lib_items = []
-            for lib in st.session_state.liabilities_accounts:
-                val_twd = lib["balance"] if lib["currency"] == "TWD" else lib["balance"] * usd_twd
-                lib_items.append({"id": lib["id"], "名稱": lib["name"], "幣別": lib["currency"], "原始金額": lib["balance"], "TWD金額": val_twd})
+            lib_items = [{"id": lib["id"], "名稱": lib["name"], "幣別": lib["currency"], "原始金額": lib["balance"], "TWD金額": lib["balance"] if lib["currency"] == "TWD" else lib["balance"] * usd_twd} for lib in st.session_state.liabilities_accounts]
             lib_df = pd.DataFrame(lib_items)
-            if display_currency == "TWD": lib_df["顯示金額"] = lib_df["TWD金額"]
-            elif display_currency == "USD": lib_df["顯示金額"] = lib_df["TWD金額"] / usd_twd
-            elif display_currency == "BTC": lib_df["顯示金額"] = (lib_df["TWD金額"] / usd_twd) / btc_usd if btc_usd else lib_df["TWD金額"]
+            lib_df["顯示金額"] = lib_df["TWD金額"] if display_currency == "TWD" else lib_df["TWD金額"] / usd_twd if display_currency == "USD" else (lib_df["TWD金額"] / usd_twd) / btc_usd if btc_usd else lib_df["TWD金額"]
             lib_total_display = lib_df["顯示金額"].sum()
 
         safe_unit = unit.replace("$", "&#36;")
-        leverage_str = f"{total_value / net_value:.2f} 倍" if net_value > 0 else "N/A"
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(f'{safe_unit} {fmt_total(lib_total_display, display_currency)}')} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(leverage_str)}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(f'{safe_unit} {fmt_total(lib_total_display, display_currency)}')} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(f'{total_value / net_value:.2f} 倍' if net_value > 0 else 'N/A')}</span></div>", unsafe_allow_html=True)
         
         with st.form("liability_form", clear_on_submit=True):
             c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
@@ -363,14 +342,9 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
             with c3: new_lib_bal = st.text_input("目前金額")
             with c4:
                 st.write("")
-                submitted = st.form_submit_button("新增負債", use_container_width=True)
-            if submitted:
-                if new_lib_name and new_lib_bal:
-                    bal = safe_float(new_lib_bal)
-                    if bal is not None:
-                        st.session_state.liabilities_accounts.append({
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": new_lib_name.strip(), "currency": new_lib_curr, "balance": bal
-                        })
+                if st.form_submit_button("新增負債", use_container_width=True):
+                    if new_lib_name and safe_float(new_lib_bal) is not None:
+                        st.session_state.liabilities_accounts.append({"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": new_lib_name.strip(), "currency": new_lib_curr, "balance": safe_float(new_lib_bal)})
                         save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                         st.success("已成功新增負債！")
                         st.rerun()
@@ -384,10 +358,8 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                     new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"lib_curr_{acc['id']}", label_visibility="collapsed")
                     new_bal = c3.text_input("金額", str(acc["balance"]), key=f"lib_bal_{acc['id']}", label_visibility="collapsed")
                     if c4.button("儲存", key=f"save_lib_{acc['id']}", type="primary", use_container_width=True):
-                        acc["name"] = new_name.strip() if new_name.strip() else acc["name"]
-                        acc["currency"] = new_curr
-                        bal = safe_float(new_bal)
-                        if bal is not None: acc["balance"] = bal
+                        acc["name"], acc["currency"] = new_name.strip() if new_name.strip() else acc["name"], new_curr
+                        if safe_float(new_bal) is not None: acc["balance"] = safe_float(new_bal)
                         save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                         st.session_state.edit_liability_id = None
                         st.rerun()
@@ -422,37 +394,19 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                             div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                             lib_hist.append({'Date': d_str, 'Value': liab / div})
                             
-                    lib_hist_df = pd.DataFrame(lib_hist)
-                    lib_hist_df['Date'] = pd.to_datetime(lib_hist_df['Date'])
-                    lib_hist_df = lib_hist_df.sort_values('Date')
-
+                    lib_hist_df = pd.DataFrame(lib_hist).sort_values('Date')
                     if not lib_hist_df.empty:
                         fig_lib_line = go.Figure()
                         hover_temp = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if st.session_state.privacy_mode else "%{x|%Y-%m-%d}<br>" + safe_unit + " %{y:,.0f}<extra></extra>"
-                        fig_lib_line.add_trace(go.Scatter(
-                            x=lib_hist_df['Date'], y=lib_hist_df['Value'], mode='lines+markers', name='負債總額',
-                            line=dict(color='#EF553B', width=3, shape='linear'), marker=dict(size=6, color='#EF553B'),
-                            fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp
-                        ))
+                        fig_lib_line.add_trace(go.Scatter(x=lib_hist_df['Date'], y=lib_hist_df['Value'], mode='lines+markers', name='負債總額', line=dict(color='#EF553B', width=3, shape='linear'), marker=dict(size=6, color='#EF553B'), fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp))
                         today_dt = pd.to_datetime(date.today())
                         start_date = today_dt - pd.DateOffset(months=1) if len(lib_hist_df) <= 30 else lib_hist_df['Date'].min() - pd.Timedelta(days=3)
-                        end_date = today_dt + pd.Timedelta(days=1)
-                        fig_lib_line.update_layout(
-                            margin=dict(t=10, b=20, l=10, r=10), height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                            xaxis=dict(range=[start_date, end_date], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
-                            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode),
-                            hovermode="x unified", dragmode="pan"
-                        )
+                        fig_lib_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
                         st.plotly_chart(fig_lib_line, use_container_width=True, config={'scrollZoom': True})
             with c_chart_right:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 負債分佈佔比</div>", unsafe_allow_html=True)
                 if not lib_df.empty:
-                    fig_lib = go.Figure(data=[go.Pie(
-                        labels=lib_df["名稱"], values=lib_df["顯示金額"], pull=[0.03]*len(lib_df),
-                        textinfo="label+percent", textfont=dict(size=14, color="#ffffff"),
-                        marker=dict(colors=["#EF553B", "#FFA15A", "#AB63FA", "#636EFA", "#00CC96"], line=dict(color="#111111", width=1.5)),
-                        sort=False, hovertemplate="%{label}<br>%{percent}<extra></extra>" if st.session_state.privacy_mode else "%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>"
-                    )])
+                    fig_lib = go.Figure(data=[go.Pie(labels=lib_df["名稱"], values=lib_df["顯示金額"], pull=[0.03]*len(lib_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#EF553B", "#FFA15A", "#AB63FA", "#636EFA", "#00CC96"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<extra></extra>" if st.session_state.privacy_mode else "%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>")])
                     fig_lib.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_lib, use_container_width=True)
         else: st.caption("目前無負債紀錄。")
@@ -466,7 +420,6 @@ with col_select:
         if choice != "+ 匯率":
             st.session_state.selected_extras.append(choice)
             st.rerun()
-
 if st.session_state.selected_extras:
     for name in st.session_state.selected_extras[:]:
         r = get_rate(EXTRA_RATES[name])
@@ -476,6 +429,7 @@ if st.session_state.selected_extras:
             if st.button("×", key=f"rm_{name}"):
                 st.session_state.selected_extras.remove(name)
                 st.rerun()
+
 st.divider()
 
 with st.sidebar:
@@ -496,38 +450,27 @@ with st.sidebar:
         st.session_state["price_input"] = ""
         st.session_state.clear_form = False
 
-    action = st.radio("交易類型", ["買進", "賣出"], horizontal=True, key="action_radio")
+    action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call"], key="action_radio")
     name = st.text_input("資產名稱", key="name_input")
     if name and looks_like_ticker(name):
-        auto_ticker = name.strip().upper()
-        crypto_map = {"BTC": "BTC-USD", "ETH": "ETH-USD", "ADA": "ADA-USD", "SOL": "SOL-USD", "DOGE": "DOGE-USD", "SUI": "SUI-USD"}
-        if auto_ticker in crypto_map: auto_ticker = crypto_map[auto_ticker]
-        if st.session_state.get("ticker_input", "") != auto_ticker:
-            st.session_state["ticker_input"] = auto_ticker
+        auto_ticker = {"BTC": "BTC-USD", "ETH": "ETH-USD", "ADA": "ADA-USD", "SOL": "SOL-USD", "DOGE": "DOGE-USD", "SUI": "SUI-USD"}.get(name.strip().upper(), name.strip().upper())
+        if st.session_state.get("ticker_input", "") != auto_ticker: st.session_state["ticker_input"] = auto_ticker
             
     ticker = st.text_input("代號", key="ticker_input")
     ticker_val = str(ticker).strip().upper()
     if ticker_val != st.session_state.prev_ticker:
-        if ticker_val.isdigit() or ticker_val.endswith((".TW", ".TWO")):
-            st.session_state["type_select"] = "台股"
-            st.session_state["currency_select"] = "TWD"
-        elif "-USD" in ticker_val:
-            st.session_state["type_select"] = "加密貨幣"
-            st.session_state["currency_select"] = "USD"
-        elif ticker_val.isalpha():
-            st.session_state["type_select"] = "美股"
-            st.session_state["currency_select"] = "USD"
+        st.session_state["type_select"] = "台股" if ticker_val.isdigit() or ticker_val.endswith((".TW", ".TWO")) else "加密貨幣" if "-USD" in ticker_val else "美股" if ticker_val.isalpha() else "其他"
+        st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = ticker_val
 
-    type_options = ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"]
-    asset_type = st.selectbox("類型", type_options, key="type_select")
+    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
     if asset_type != st.session_state.prev_type:
         st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_type = asset_type
 
     currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
-    quantity_str = st.text_input("數量", placeholder="輸入數量 (若是期貨請填1)", key="qty_input")
-    price_str = st.text_input(f"價格（{currency}）", value="", placeholder="輸入價格（留白將使用自動抓價）", key="price_input")
+    quantity_str = st.text_input("數量", placeholder="輸入數量 (SP/CC 可輸入 0)", key="qty_input")
+    price_str = st.text_input(f"價格（{currency}）", value="", placeholder="輸入價格/總權利金", key="price_input")
     trade_date = st.date_input("交易日期", value=date.today(), key="date_input")
     note = st.text_input("備註", value="", key="note_input")
 
@@ -538,7 +481,11 @@ with st.sidebar:
             market_price = get_latest_price(str(ticker))
             if market_price: price = market_price
                 
-        if name and qty and qty > 0 and price and price > 0:
+        is_premium_action = action in ["Sell Put", "Covered Call"]
+        valid_qty = (qty is not None and qty >= 0) if is_premium_action else (qty is not None and qty > 0)
+        valid_price = (price is not None) if is_premium_action else (price is not None and price > 0)
+        
+        if name and valid_qty and valid_price:
             new_tx = {
                 "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "date": trade_date.strftime("%Y-%m-%d"),
                 "type": action, "name": name, "ticker": str(ticker).strip().upper() if ticker else "",
@@ -551,7 +498,7 @@ with st.sidebar:
             save_data("transactions", st.session_state.transactions)
             fetch_all_prices.clear()
             st.rerun()
-        else: st.warning("請正確填寫名稱、數量。若自動抓價失敗, 請手動輸入價格。")
+        else: st.warning("請正確填寫。買進賣出價格需大於 0；SP/CC 數量可為 0，且價格可輸入負數表示平倉買回。")
 
     st.divider()
     st.caption(f"交易紀錄：{len(st.session_state.transactions)} 筆")
@@ -559,13 +506,32 @@ with st.sidebar:
     st.caption(f"Streamlit 版本: {st.__version__}")
 
 holdings = calculate_holdings(st.session_state.transactions)
+
 for acc in st.session_state.cash_accounts:
-    holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "平均成本": 1.0, "總成本": acc["balance"], "is_cash": True})
+    holdings.append({
+        "名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", 
+        "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "已實現損益": 0.0, "is_cash": True
+    })
 
 if not holdings:
-    st.info("目前沒有持倉或現金。請從左側新增第一筆「買進」交易，或在下方新增現金帳戶。")
+    st.info("目前沒有持倉或現金。請從左側新增第一筆交易，或在下方新增現金帳戶。")
     render_cash_manager()
 else:
+    for h in holdings:
+        if h.get("is_cash"):
+            h["總成本"] = h["原始總成本"]
+            h["平均成本"] = 1.0
+            h["調整後成本"] = 1.0
+        else:
+            eff_cost = h["原始總成本"]
+            adj_total_cost = h["原始總成本"] - h["CC權利金"] - h["SP權利金"]
+            if st.session_state.get("include_premium", False):
+                eff_cost = adj_total_cost
+                
+            h["總成本"] = eff_cost
+            h["平均成本"] = h["原始總成本"] / h["數量"] if h["數量"] > 0 else 0
+            h["調整後成本"] = adj_total_cost / h["數量"] if h["數量"] > 0 else 0
+
     df = pd.DataFrame(holdings)
     df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
     unique_tickers = tuple(set(row["代號"] for row in holdings if row.get("代號") and not row.get("is_cash")))
@@ -605,9 +571,6 @@ else:
         if cur == "BTC": return val * (btc_usd * usd_twd) if btc_usd else val
         return val
         
-    total_twd_snapshot = sum(get_twd_value(row["現值"], row["幣別"]) for _, row in df.iterrows())
-    total_cost_twd_snapshot = sum(get_twd_value(row["總成本"], row["幣別"]) for _, row in df.iterrows())
-    
     total_liability_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
     total_liability_display = convert(total_liability_twd, "TWD")
 
@@ -662,6 +625,8 @@ else:
         st.session_state.display_currency = new_currency
         st.rerun()
 
+    st.checkbox("損益計算包含權利金降本效益", key="include_premium")
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("淨資產現值", mask_val(f"{unit.replace('&#36;', '$')} {fmt_total(net_value, display_currency)}"))
     m2.metric("總資產現值", mask_val(f"{unit.replace('&#36;', '$')} {fmt_total(total_value, display_currency)}"))
@@ -670,8 +635,10 @@ else:
 
     render_liability_manager(unit, display_currency, total_value, net_value)
 
+    df_chart = df[df["數量"] > 0].copy()
+
     st.subheader("目前持倉配置")
-    category_summary = df.groupby("類型")[["顯示現值", "顯示損益", "顯示總成本"]].sum().reset_index()
+    category_summary = df_chart.groupby("類型")[["顯示現值", "顯示損益", "顯示總成本"]].sum().reset_index()
     category_summary = category_summary.sort_values("顯示現值", ascending=False)
     
     order_list = [cat for cat in category_summary['類型'] if cat not in ['期貨', '現金']]
@@ -698,11 +665,11 @@ else:
 
     is_category_view = st.session_state.selected_category is not None
     if is_category_view:
-        view_df = df[df["類型"] == st.session_state.selected_category].copy()
+        view_df = df_chart[df_chart["類型"] == st.session_state.selected_category].copy()
         cat_total_val = fmt_total(view_df['顯示現值'].sum(), display_currency)
         st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(f'{unit.replace('$', '&#36;')} {cat_total_val}')}", unsafe_allow_html=True)
     else:
-        view_df = df.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
+        view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
 
     if not view_df.empty:
         all_labels = view_df["名稱"].tolist()
@@ -815,7 +782,6 @@ else:
                 twd_c = cost - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("cost", 0)
                 div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                 v, c = twd_v / div, twd_c / div
-
             processed_history.append({'Date': d_str, 'Value': v, 'Cost': c})
 
         hist_df = pd.DataFrame(processed_history)
@@ -843,21 +809,34 @@ else:
     with st.expander("點此展開 / 收合明細表", expanded=False):
         if st.session_state.selected_category == "現金": render_cash_manager()
         detail_df = df[df["類型"] == st.session_state.selected_category] if is_category_view else df
+        
         show_df = pd.DataFrame({
             "名稱": detail_df["名稱"], "代號": detail_df["代號"], "類型": detail_df["類型"], "幣別": detail_df["幣別"], "數量": detail_df["數量"],
             "平均成本": detail_df.apply(lambda r: None if r.get("is_cash") else r["平均成本"], axis=1),
+            "調整後成本": detail_df.apply(lambda r: None if r.get("is_cash") else r["調整後成本"], axis=1),
             "現價": detail_df.apply(lambda r: None if r.get("is_cash") else r["現價"], axis=1),
-            "現值": detail_df["現值"], "未實現損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["未實現損益"], axis=1)
+            "現值": detail_df["現值"], 
+            "未實現損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["未實現損益"], axis=1),
+            "SP權利金": detail_df.apply(lambda r: None if r.get("is_cash") else r["SP權利金"], axis=1),
+            "CC權利金": detail_df.apply(lambda r: None if r.get("is_cash") else r["CC權利金"], axis=1),
+            "已實現總損益": detail_df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1)
         })
 
         if privacy:
             privacy_df = show_df.copy()
-            privacy_df[["數量", "平均成本", "現價", "現值", "未實現損益"]] = "＊＊＊＊"
+            privacy_df[["數量", "平均成本", "調整後成本", "現價", "現值", "未實現損益", "SP權利金", "CC權利金", "已實現總損益"]] = "＊＊＊＊"
             st.dataframe(privacy_df, use_container_width=True, hide_index=True)
         else:
             st.dataframe(show_df, use_container_width=True, hide_index=True, column_config={
-                "數量": st.column_config.NumberColumn("數量", format="%.4f"), "平均成本": st.column_config.NumberColumn("平均成本", format="%.4f"),
-                "現價": st.column_config.NumberColumn("現價", format="%.4f"), "現值": st.column_config.NumberColumn("現值", format="%.2f"), "未實現損益": st.column_config.NumberColumn("未實現損益", format="%.2f")
+                "數量": st.column_config.NumberColumn("數量", format="%.0f"), 
+                "平均成本": st.column_config.NumberColumn("平均成本", format="%.2f"),
+                "調整後成本": st.column_config.NumberColumn("調整後成本", format="%.2f"),
+                "現價": st.column_config.NumberColumn("現價", format="%.2f"), 
+                "現值": st.column_config.NumberColumn("現值", format="%.0f"), 
+                "未實現損益": st.column_config.NumberColumn("未實現損益", format="%.0f"),
+                "SP權利金": st.column_config.NumberColumn("SP權利金", format="%.0f"),
+                "CC權利金": st.column_config.NumberColumn("CC權利金", format="%.0f"),
+                "已實現總損益": st.column_config.NumberColumn("已實現總損益", format="%.0f")
             })
 
         if st.session_state.selected_category != "現金":
@@ -898,7 +877,7 @@ else:
             date_preset = st.selectbox("篩選時間範圍", ["全部", "本月", "半年", "一年", "自訂區間"])
             date_range = st.date_input("選擇日期", value=(min_d, max_d), min_value=min_d, max_value=max_d) if date_preset == "自訂區間" else (min_d, max_d) if date_preset == "全部" else (today_d.replace(day=1), today_d) if date_preset == "本月" else (today_d - timedelta(days=183), today_d) if date_preset == "半年" else (today_d - timedelta(days=365), today_d)
         with f_c2: selected_target = st.selectbox("篩選標的", target_options)
-        with f_c3: action_filter = st.selectbox("篩選動作", ["全部", "買進", "賣出"])
+        with f_c3: action_filter = st.selectbox("篩選動作", ["全部", "買進", "賣出", "Sell Put", "Covered Call"])
 
         if isinstance(date_range, tuple):
             if len(date_range) == 2: tx_df = tx_df[(tx_df["date_obj"] >= date_range[0]) & (tx_df["date_obj"] <= date_range[1])]
@@ -912,7 +891,10 @@ else:
                 if st.session_state.editing_id == row["id"]:
                     c1, c2, c3, c4, c5, c6 = st.columns([1.2, 0.8, 2.0, 1.8, 0.7, 1.3])
                     with c1: new_date = st.date_input("日期", value=date.fromisoformat(row["date"]), key=f"ed_d_{row['id']}", label_visibility="collapsed")
-                    with c2: new_type = st.selectbox("動作", ["買進", "賣出"], index=0 if row["type"]=="買進" else 1, key=f"ed_t_{row['id']}", label_visibility="collapsed")
+                    with c2: 
+                        type_options_list = ["買進", "賣出", "Sell Put", "Covered Call"]
+                        current_type_idx = type_options_list.index(row["type"]) if row["type"] in type_options_list else 0
+                        new_type = st.selectbox("動作", type_options_list, index=current_type_idx, key=f"ed_t_{row['id']}", label_visibility="collapsed")
                     with c3:
                         cc1, cc2 = st.columns([1.5, 1])
                         new_name = cc1.text_input("名稱", value=row["name"], key=f"ed_n_{row['id']}", label_visibility="collapsed")
@@ -927,7 +909,7 @@ else:
                         if b1.button("儲存", key=f"save_tx_{row['id']}", type="primary", use_container_width=True):
                             for idx, t in enumerate(st.session_state.transactions):
                                 if t["id"] == row["id"]:
-                                    st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) or row["price"], "currency": new_curr})
+                                    st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr})
                                     break
                             save_data("transactions", st.session_state.transactions)
                             st.session_state.editing_id = None
