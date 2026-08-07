@@ -922,56 +922,98 @@ else:
         filtered_df['PnL'] = filtered_df['Value'] - filtered_df['Cost']
         
         unit_str = unit.replace("$", "&#36;")
-        filtered_df['pnl_text'] = filtered_df['PnL'].apply(lambda x: f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>" if x > 0 else f"{unit_str} 0")
+        
+        def get_val_text_global(x):
+            if x < 0: return f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>"
+            elif x > 0: return f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>"
+            else: return f"{unit_str} 0"
 
-        # 💡 為圖表建立填色的輔助邊界
+        def get_pct_text_global(row):
+            pnl, cost = row['PnL'], row['Cost']
+            pct = (pnl / cost * 100) if cost > 0 else 0
+            if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
+            elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
+            else: return "0.00%"
+
+        filtered_df['pnl_val_text'] = filtered_df['PnL'].apply(get_val_text_global)
+        filtered_df['pnl_pct_text'] = filtered_df.apply(get_pct_text_global, axis=1)
+
         filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
         filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
         
-        # 💡 建立一個隱形的 Y 軸，讓「損益」永遠排在 Tooltip 最下方
+        # 💡 排列 Y 軸順序，確保在 x unified 的顯示順序永遠墊底
         filtered_df['pnl_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - 1
+        filtered_df['pct_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - 2
+        
+        filtered_df['pnl_y_gain'] = filtered_df.apply(lambda r: r['pnl_y'] if r['PnL'] >= 0 else None, axis=1)
+        filtered_df['pnl_y_loss'] = filtered_df.apply(lambda r: r['pnl_y'] if r['PnL'] < 0 else None, axis=1)
+        
+        filtered_df['pct_y_gain'] = filtered_df.apply(lambda r: r['pct_y'] if r['PnL'] >= 0 else None, axis=1)
+        filtered_df['pct_y_loss'] = filtered_df.apply(lambda r: r['pct_y'] if r['PnL'] < 0 else None, axis=1)
 
         if not filtered_df.empty:
             fig_line = go.Figure()
             
+            val_name = '淨額' if st.session_state.selected_category is not None else '淨資產'
+            
             if privacy:
-                hover_temp_val = "＊＊＊＊<extra></extra>"
-                hover_temp_cost = "＊＊＊＊<extra></extra>"
-                hover_temp_pnl = "＊＊＊＊<extra></extra>"
+                hover_temp_val = f"＊＊＊＊<extra>{val_name}</extra>"
+                hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
+                hover_temp_pnl = "＊＊＊＊<extra><span style='color:#e2e8f0'>損益</span></extra>"
+                hover_temp_pct = "＊＊＊＊<extra><span style='color:#e2e8f0'>百分比</span></extra>"
             else:
-                hover_temp_val = unit_str + " %{y:,.0f}<extra></extra>"
-                hover_temp_cost = unit_str + " %{y:,.0f}<extra></extra>"
-                hover_temp_pnl = "%{customdata}<extra></extra>"
+                # 💡 利用原生表格對齊：<extra> 放左欄文字，其餘放右欄
+                hover_temp_val = unit_str + f" %{{y:,.0f}}<extra>{val_name}</extra>"
+                hover_temp_cost = unit_str + " %{y:,.0f}<extra>成本</extra>"
+                hover_temp_pnl = "%{customdata}<extra><span style='color:#e2e8f0'>損益</span></extra>"
+                hover_temp_pct = "%{customdata}<extra><span style='color:#e2e8f0'>百分比</span></extra>"
 
-            # 1. 獲利填色區間 (黃色)
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
-
-            # 2. 虧損填色區間 (紅色)
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
-
-            # 3. 隱形的損益軌跡 (加入順序1 -> 顯示在 Tooltip 最下方)
+            # 1. 隱形軌跡：百分比 (Row 4)
             fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['pnl_y'], mode='lines', name='損益', 
-                line=dict(color='#94a3b8', width=0), customdata=filtered_df['pnl_text'] if not privacy else None, 
-                hovertemplate=hover_temp_pnl, showlegend=False
+                x=filtered_df['Date'], y=filtered_df['pct_y_gain'], mode='lines', name='百分比', 
+                line=dict(color='#4ade80', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
+                hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False
+            ))
+            fig_line.add_trace(go.Scatter(
+                x=filtered_df['Date'], y=filtered_df['pct_y_loss'], mode='lines', name='百分比', 
+                line=dict(color='#ef4444', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
+                hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False
             ))
 
-            # 4. 成本線 (加入順序2 -> 顯示在 Tooltip 中間)
+            # 2. 隱形軌跡：損益金額 (Row 3)
+            fig_line.add_trace(go.Scatter(
+                x=filtered_df['Date'], y=filtered_df['pnl_y_gain'], mode='lines', name='損益', 
+                line=dict(color='#4ade80', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
+                hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False
+            ))
+            fig_line.add_trace(go.Scatter(
+                x=filtered_df['Date'], y=filtered_df['pnl_y_loss'], mode='lines', name='損益', 
+                line=dict(color='#ef4444', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
+                hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False
+            ))
+
+            # 3. 成本線
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines+markers', name='成本', 
                 line=dict(color='#3b82f6', width=3, shape='linear'), marker=dict(size=6, color='#3b82f6'), 
                 hovertemplate=hover_temp_cost
             ))
             
-            # 5. 淨資產線 (加入順序3 -> 顯示在 Tooltip 最上方)
+            # 4. 淨資產線
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['Value'], mode='lines+markers', 
-                name='淨額' if st.session_state.selected_category is not None else '淨資產', 
+                name=val_name, 
                 line=dict(color='#00CC96', width=3, shape='linear'), marker=dict(size=6, color='#00CC96'), 
                 hovertemplate=hover_temp_val
             ))
+
+            # 5. 獲利填色區間 (黃色)
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+
+            # 6. 虧損填色區間 (紅色)
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
 
             fig_line.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, end_date], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy, autorange=True), hovermode="x unified", dragmode="pan")
             st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
@@ -1136,14 +1178,34 @@ else:
                 currency_symbols = {"TWD": "NT&#36;", "USD": "US&#36;", "BTC": "BTC"}
                 asset_unit_str = currency_symbols.get(asset_currency, asset_currency)
 
-                daily_data["pnl_text"] = daily_data["pnl"].apply(lambda x: f"<span style='color:#ef4444'>-{asset_unit_str} {abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{asset_unit_str} {x:,.0f}</span>" if x > 0 else f"{asset_unit_str} 0")
+                def get_val_text_ind(x):
+                    if x < 0: return f"<span style='color:#ef4444'>-{asset_unit_str} {abs(x):,.0f}</span>"
+                    elif x > 0: return f"<span style='color:#4ade80'>+{asset_unit_str} {x:,.0f}</span>"
+                    else: return f"{asset_unit_str} 0"
 
-                # 💡 為個別圖表建立填色的輔助邊界
+                def get_pct_text_ind(row):
+                    pnl, cost = row['pnl'], row['cost']
+                    pct = (pnl / cost * 100) if cost > 0 else 0
+                    if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
+                    elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
+                    else: return "0.00%"
+
+                daily_data['pnl_val_text'] = daily_data['pnl'].apply(get_val_text_ind)
+                daily_data['pnl_pct_text'] = daily_data.apply(get_pct_text_ind, axis=1)
+
                 daily_data['Value_Gain'] = daily_data[['Value', 'cost']].max(axis=1)
                 daily_data['Value_Loss'] = daily_data[['Value', 'cost']].min(axis=1)
                 
-                # 💡 建立一個隱形的 Y 軸，讓「損益」永遠排在 Tooltip 最下方
-                daily_data['pnl_y'] = daily_data[['Value', 'cost']].min(axis=1) - 1
+                # 💡 建立隱形的 Y 軸，讓「損益金額」與「百分比」永遠排在 Tooltip 最下方
+                min_val_ind = daily_data[['Value', 'cost']].min(axis=1)
+                daily_data['pnl_y'] = min_val_ind - 1
+                daily_data['pct_y'] = min_val_ind - 2
+
+                daily_data['pnl_y_gain'] = daily_data.apply(lambda r: r['pnl_y'] if r['pnl'] >= 0 else None, axis=1)
+                daily_data['pnl_y_loss'] = daily_data.apply(lambda r: r['pnl_y'] if r['pnl'] < 0 else None, axis=1)
+                
+                daily_data['pct_y_gain'] = daily_data.apply(lambda r: r['pct_y'] if r['pnl'] >= 0 else None, axis=1)
+                daily_data['pct_y_loss'] = daily_data.apply(lambda r: r['pct_y'] if r['pnl'] < 0 else None, axis=1)
 
                 st.markdown(f"*(註: 以下圖表皆以該標的原始計價幣別 **{asset_currency}** 呈現，不受匯率波動影響)*")
                 
@@ -1153,43 +1215,62 @@ else:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
                     fig1 = go.Figure()
                     
+                    val_name_ind = '淨額'
                     if privacy:
-                        hover_val = "＊＊＊＊<extra></extra>"
-                        hover_cost = "＊＊＊＊<extra></extra>"
-                        hover_pnl = "＊＊＊＊<extra></extra>"
+                        hover_val = f"＊＊＊＊<extra>{val_name_ind}</extra>"
+                        hover_cost = "＊＊＊＊<extra>成本</extra>"
+                        hover_pnl = "＊＊＊＊<extra><span style='color:#e2e8f0'>損益</span></extra>"
+                        hover_pct = "＊＊＊＊<extra><span style='color:#e2e8f0'>百分比</span></extra>"
                     else:
-                        hover_val = asset_unit_str + " %{y:,.0f}<extra></extra>"
-                        hover_cost = asset_unit_str + " %{y:,.0f}<extra></extra>"
-                        hover_pnl = "%{customdata}<extra></extra>"
+                        # 💡 完美對齊魔法：<extra> 擔任左欄文字，hovertemplate 擔任右欄文字
+                        hover_val = asset_unit_str + f" %{{y:,.0f}}<extra>{val_name_ind}</extra>"
+                        hover_cost = asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
+                        hover_pnl = "%{customdata}<extra><span style='color:#e2e8f0'>損益</span></extra>"
+                        hover_pct = "%{customdata}<extra><span style='color:#e2e8f0'>百分比</span></extra>"
                     
-                    # 1. 黃色區塊 (獲利) 的基準線
-                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-                    # 2. 黃色區塊 (獲利) 的填色區間
-                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
-
-                    # 3. 紅色區塊 (虧損) 的基準線
-                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-                    # 4. 紅色區塊 (虧損) 的填色區間
-                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
-
-                    # 5. 隱形的損益軌跡 (加入順序1 -> 顯示在 Tooltip 最下方)
+                    # 1. 隱形軌跡：百分比 (Row 4)
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['pnl_y'], mode='lines', name='損益', 
-                        line=dict(color='#94a3b8', width=0), customdata=daily_data['pnl_text'] if not privacy else None, 
-                        hovertemplate=hover_pnl, showlegend=False
+                        x=daily_data.index, y=daily_data['pct_y_gain'], mode='lines', name='百分比', 
+                        line=dict(color='#4ade80', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
+                        hovertemplate=hover_pct, showlegend=False, connectgaps=False
+                    ))
+                    fig1.add_trace(go.Scatter(
+                        x=daily_data.index, y=daily_data['pct_y_loss'], mode='lines', name='百分比', 
+                        line=dict(color='#ef4444', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
+                        hovertemplate=hover_pct, showlegend=False, connectgaps=False
                     ))
 
-                    # 6. 成本線 (加入順序2 -> 顯示在 Tooltip 中間)
+                    # 2. 隱形軌跡：損益金額 (Row 3)
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', 
+                        x=daily_data.index, y=daily_data['pnl_y_gain'], mode='lines', name='損益', 
+                        line=dict(color='#4ade80', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
+                        hovertemplate=hover_pnl, showlegend=False, connectgaps=False
+                    ))
+                    fig1.add_trace(go.Scatter(
+                        x=daily_data.index, y=daily_data['pnl_y_loss'], mode='lines', name='損益', 
+                        line=dict(color='#ef4444', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
+                        hovertemplate=hover_pnl, showlegend=False, connectgaps=False
+                    ))
+
+                    # 3. 成本線
+                    fig1.add_trace(go.Scatter(
+                        x=daily_data.index, y=daily_data['cost'], mode='lines+markers', name='成本', 
                         line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
                     ))
                     
-                    # 7. 淨值線 (加入順序3 -> 顯示在 Tooltip 最上方)
+                    # 4. 淨值線
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', 
+                        x=daily_data.index, y=daily_data['Value'], mode='lines+markers', name=val_name_ind, 
                         line=dict(color='#00CC96', width=2), hovertemplate=hover_val
                     ))
+
+                    # 5. 獲利填色區間 (黃色)
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+
+                    # 6. 虧損填色區間 (紅色)
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
                     fig1.update_layout(
                         margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
