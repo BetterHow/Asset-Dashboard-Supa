@@ -921,24 +921,29 @@ else:
         filtered_df = hist_df[hist_df['Date'] >= start_date].copy()
         filtered_df['PnL'] = filtered_df['Value'] - filtered_df['Cost']
         
-        filtered_df['pnl_text'] = filtered_df['PnL'].apply(lambda x: f"<span style='color:#ef4444'>-{abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{x:,.0f}</span>" if x > 0 else "0")
+        # 💡 [新增] 動態著色的損益文字
+        unit_str = unit.replace("$", "&#36;")
+        filtered_df['pnl_text'] = filtered_df['PnL'].apply(lambda x: f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>" if x > 0 else f"{unit_str} 0")
 
         # 💡 為圖表建立填色的輔助邊界
         filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
         filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
+        
+        # 💡 建立一個隱形的 Y 軸，讓「損益」永遠排在 Tooltip 最下方
+        filtered_df['pnl_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - 1
 
         if not filtered_df.empty:
             fig_line = go.Figure()
-            unit_str = unit.replace("$", "&#36;")
             
             if privacy:
                 hover_temp_val = "＊＊＊＊<extra></extra>"
                 hover_temp_cost = "＊＊＊＊<extra></extra>"
-                hover_temp_pnl = "損益金額: ＊＊＊＊<extra></extra>"
+                hover_temp_pnl = "＊＊＊＊<extra></extra>"
             else:
                 hover_temp_val = unit_str + " %{y:,.0f}<extra></extra>"
                 hover_temp_cost = unit_str + " %{y:,.0f}<extra></extra>"
-                hover_temp_pnl = "損益金額: %{customdata}<extra></extra>"
+                # 💡 [修正] 不寫死文字，改靠 Trace Name 自動對齊表格
+                hover_temp_pnl = "%{customdata}<extra></extra>"
 
             # 1. 黃色區塊 (獲利) 的基準線
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
@@ -957,7 +962,12 @@ else:
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value'], mode='lines+markers', name='淨額' if st.session_state.selected_category is not None else '淨資產', line=dict(color='#00CC96', width=3, shape='linear'), marker=dict(size=6, color='#00CC96'), hovertemplate=hover_temp_val))
 
             # 7. 隱形的損益文字軌跡 (對應說明框的第三層)
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', name='損益金額', line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_text'] if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False))
+            # 💡 [修正] 加入 Name="損益" 來觸發原生的左側文字對齊
+            fig_line.add_trace(go.Scatter(
+                x=filtered_df['Date'], y=filtered_df['pnl_y'], mode='lines', name='損益', 
+                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_text'] if not privacy else None, 
+                hovertemplate=hover_temp_pnl, showlegend=False
+            ))
 
             fig_line.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, end_date], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy, autorange=True), hovermode="x unified", dragmode="pan")
             st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
@@ -1118,11 +1128,19 @@ else:
                     daily_data["Value"] = daily_data["cost"] 
                 
                 daily_data["pnl"] = daily_data["Value"] - daily_data["cost"]
-                daily_data["pnl_text"] = daily_data["pnl"].apply(lambda x: f"<span style='color:#ef4444'>-{abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{x:,.0f}</span>" if x > 0 else "0")
+                
+                # 💡 [新增] 動態貨幣符號
+                currency_symbols = {"TWD": "NT&#36;", "USD": "US&#36;", "BTC": "BTC"}
+                asset_unit_str = currency_symbols.get(asset_currency, asset_currency)
+
+                daily_data["pnl_text"] = daily_data["pnl"].apply(lambda x: f"<span style='color:#ef4444'>-{asset_unit_str} {abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{asset_unit_str} {x:,.0f}</span>" if x > 0 else f"{asset_unit_str} 0")
 
                 # 💡 為個別圖表建立填色的輔助邊界
                 daily_data['Value_Gain'] = daily_data[['Value', 'cost']].max(axis=1)
                 daily_data['Value_Loss'] = daily_data[['Value', 'cost']].min(axis=1)
+                
+                # 💡 建立一個隱形的 Y 軸，讓「損益」永遠排在 Tooltip 最下方
+                daily_data['pnl_y'] = daily_data[['Value', 'cost']].min(axis=1) - 1
 
                 st.markdown(f"*(註: 以下圖表皆以該標的原始計價幣別 **{asset_currency}** 呈現，不受匯率波動影響)*")
                 
@@ -1135,11 +1153,12 @@ else:
                     if privacy:
                         hover_val = "＊＊＊＊<extra></extra>"
                         hover_cost = "＊＊＊＊<extra></extra>"
-                        hover_pnl = "損益金額: ＊＊＊＊<extra></extra>"
+                        hover_pnl = "＊＊＊＊<extra></extra>"
                     else:
-                        hover_val = "%{y:,.0f}<extra></extra>"
-                        hover_cost = "%{y:,.0f}<extra></extra>"
-                        hover_pnl = "損益金額: %{customdata}<extra></extra>"
+                        hover_val = asset_unit_str + " %{y:,.0f}<extra></extra>"
+                        hover_cost = asset_unit_str + " %{y:,.0f}<extra></extra>"
+                        # 💡 [修正] 移除寫死的文字，讓表格自動對齊
+                        hover_pnl = "%{customdata}<extra></extra>"
                     
                     # 1. 黃色區塊 (獲利) 的基準線
                     fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
@@ -1153,7 +1172,7 @@ else:
 
                     # 5. 繪製真實的「成本線」
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', 
+                        x=daily_data.index, y=daily_data['cost'], mode='lines', name='成本', 
                         line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
                     ))
                     # 6. 繪製真實的「淨值線」
@@ -1163,7 +1182,7 @@ else:
                     ))
                     # 7. 隱形的損益文字軌跡
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['cost'], mode='lines', name='損益金額', 
+                        x=daily_data.index, y=daily_data['pnl_y'], mode='lines', name='損益', 
                         line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_text'] if not privacy else None, 
                         hovertemplate=hover_pnl, showlegend=False
                     ))
