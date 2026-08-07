@@ -4,149 +4,87 @@ import plotly.graph_objects as go
 import yfinance as yf
 from datetime import datetime, date, timedelta
 import json
+import os
 import re
 import concurrent.futures
-import hashlib
-import base64
-from cryptography.fernet import Fernet
-from supabase import create_client, Client
+import gspread
 
-st.set_page_config(page_title="個人加密資產金庫", page_icon="🔐", layout="wide")
+st.set_page_config(page_title="交易紀錄版｜個人資產", page_icon="📊", layout="wide")
 
 # ========================================================
-# 🚀 零知識加密與 Supabase 連線核心
+# 🚀 Google Sheets 雲端資料庫連線區塊
 # ========================================================
+GC_KEY_FILE = "google_key.json"
+SPREADSHEET_NAME = "Asset_Dashboard"
+
+LOCAL_FILES = {
+    "transactions": "transactions.json",
+    "manual_prices": "manual_prices.json",
+    "cash_accounts": "cash_accounts.json",
+    "liabilities_accounts": "liabilities_accounts.json",
+    "history_snapshots": "history_snapshots.json"
+}
+
 @st.cache_resource
-def init_supabase() -> Client:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
-
-try:
-    supabase = init_supabase()
-except Exception as e:
-    st.error(f"⚠️ Supabase 連線失敗，請確認 secrets.toml 設定。錯誤：{e}")
-    st.stop()
-
-def get_encryption_key(password: str) -> bytes:
-    """用使用者的密碼，轉換成 32-byte 的專屬加密金鑰"""
-    digest = hashlib.sha256(password.encode('utf-8')).digest()
-    return base64.urlsafe_b64encode(digest)
-
-def encrypt_data(data, password: str) -> str:
-    """將明文資料加密成亂碼"""
-    f = Fernet(get_encryption_key(password))
-    json_str = json.dumps(data, ensure_ascii=False)
-    return f.encrypt(json_str.encode('utf-8')).decode('utf-8')
-
-def decrypt_data(encrypted_str: str, password: str):
-    """用使用者的密碼解密亂碼"""
+def get_gspread_client():
     try:
-        f = Fernet(get_encryption_key(password))
-        decrypted_bytes = f.decrypt(encrypted_str.encode('utf-8'))
-        return json.loads(decrypted_bytes.decode('utf-8'))
-    except Exception:
-        return None
-
-def save_data(category, data):
-    """上傳加密後的資料到 Supabase"""
-    try:
-        enc_payload = encrypt_data(data, st.session_state.password)
-        res = supabase.table("encrypted_vault").select("id").eq("user_id", st.session_state.user.id).eq("category", category).execute()
-        if res.data:
-            row_id = res.data[0]["id"]
-            supabase.table("encrypted_vault").update({"encrypted_payload": enc_payload}).eq("id", row_id).execute()
-        else:
-            supabase.table("encrypted_vault").insert({
-                "user_id": st.session_state.user.id,
-                "category": category,
-                "encrypted_payload": enc_payload
-            }).execute()
+        if "google_credentials" in st.secrets:
+            creds_dict = json.loads(st.secrets["google_credentials"])
+            return gspread.service_account_from_dict(creds_dict)
+        return gspread.service_account(filename=GC_KEY_FILE)
     except Exception as e:
-        st.error(f"儲存 {category} 失敗: {e}")
+        st.error(f"⚠️ Google 授權失敗！請確認金鑰設定。錯誤：{e}")
+        st.stop()
 
-def load_data(category, default_val):
-    """從 Supabase 下載亂碼並在本地解密"""
+@st.cache_resource
+def get_spreadsheet():
+    client = get_gspread_client()
     try:
-        res = supabase.table("encrypted_vault").select("encrypted_payload").eq("user_id", st.session_state.user.id).eq("category", category).execute()
-        if res.data:
-            enc_payload = res.data[0]["encrypted_payload"]
-            decrypted = decrypt_data(enc_payload, st.session_state.password)
-            return decrypted if decrypted is not None else default_val
+        return client.open(SPREADSHEET_NAME)
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"⚠️ 找不到名為 `{SPREADSHEET_NAME}` 的試算表！")
+        st.stop()
+
+sh = get_spreadsheet()
+
+def save_data(sheet_name, data):
+    try:
+        ws = sh.worksheet(sheet_name)
+        json_str = json.dumps(data, ensure_ascii=False)
+        try:
+            ws.update(values=[['JSON_DATA'], [json_str]], range_name='A1:A2')
+        except TypeError:
+            ws.update('A1:A2', [['JSON_DATA'], [json_str]])
+    except Exception as e:
+        st.error(f"儲存至 {sheet_name} 失敗：{e}")
+
+@st.cache_data(ttl=600)
+def load_or_migrate_data(sheet_name, default_val):
+    try:
+        ws = sh.worksheet(sheet_name)
+        val = ws.acell('A2').value
+        if val:
+            return json.loads(val)
+        else:
+            local_file = LOCAL_FILES.get(sheet_name)
+            if local_file and os.path.exists(local_file):
+                with open(local_file, "r", encoding="utf-8") as f:
+                    local_data = json.load(f)
+                save_data(sheet_name, local_data)
+                return local_data
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"⚠️ 找不到工作表：`{sheet_name}`")
+        st.stop()
     except Exception:
         pass
     return default_val
 
-# ========================================================
-# 🔐 登入與註冊介面
-# ========================================================
-if "user" not in st.session_state:
-    st.session_state.user = None
-if "password" not in st.session_state:
-    st.session_state.password = None
-
-if st.session_state.user is None:
-    st.markdown("<h2 style='text-align: center; margin-top: 50px;'>🔐 端到端加密資產金庫</h2>", unsafe_allow_html=True)
-    st.caption("<div style='text-align: center;'>你的資料在離開此設備前即被加密。連系統管理員也無法讀取。</div>", unsafe_allow_html=True)
-    st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        tab_login, tab_reg = st.tabs(["登入", "註冊新帳號"])
-        
-        with tab_login:
-            login_email = st.text_input("Email", key="l_email")
-            login_pwd = st.text_input("密碼", type="password", key="l_pwd")
-            if st.button("登入金庫", use_container_width=True, type="primary"):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pwd})
-                    st.session_state.user = res.user
-                    st.session_state.password = login_pwd
-                    st.rerun()
-                except Exception as e:
-                    st.error("登入失敗，請確認帳號密碼是否正確。")
-                    
-        with tab_reg:
-            reg_email = st.text_input("Email", key="r_email")
-            reg_pwd = st.text_input("密碼 (請牢記！作為加密鑰匙，遺失將永遠無法解密資料)", type="password", key="r_pwd")
-            if st.button("註冊帳號", use_container_width=True):
-                try:
-                    res = supabase.auth.sign_up({"email": reg_email, "password": reg_pwd})
-                    st.success("註冊成功！如果 Supabase 預設開啟信箱驗證，請先去收信驗證後，切換回登入頁面登入。")
-                except Exception as e:
-                    st.error(f"註冊失敗: {e}")
-    st.stop()
-
-# ========================================================
-# 📊 以下為正式 App 儀表板
-# ========================================================
-st.markdown(
-    """
-    <style>
-    section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
-    
-    /* 僅將側邊欄收折/展開按鈕設定為固定，避免誤傷右上角系統選單 */
-    div[data-testid="collapsedControl"], 
-    button[data-testid="stSidebarCollapseButton"] {
-        position: fixed !important; 
-        top: 10px !important; 
-        z-index: 999999;
-    }
-    div[data-testid="stButton"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
-    </style>
-    """, unsafe_allow_html=True
-)
-
-st.title("📊 個人資產儀表板（端到端加密版）")
-st.caption("支援買進 / 賣出 / SP / CC / 配息｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
-
-# 初始化載入資料 (從 Supabase 解密)
-if "transactions" not in st.session_state: st.session_state.transactions = load_data("transactions", [])
-if "manual_prices" not in st.session_state: st.session_state.manual_prices = load_data("manual_prices", {})
-if "cash_accounts" not in st.session_state: st.session_state.cash_accounts = load_data("cash_accounts", [])
-if "liabilities_accounts" not in st.session_state: st.session_state.liabilities_accounts = load_data("liabilities_accounts", [])
-if "history_snapshots" not in st.session_state: st.session_state.history_snapshots = load_data("history_snapshots", {})
+# 初始化載入資料
+if "transactions" not in st.session_state: st.session_state.transactions = load_or_migrate_data("transactions", [])
+if "manual_prices" not in st.session_state: st.session_state.manual_prices = load_or_migrate_data("manual_prices", {})
+if "cash_accounts" not in st.session_state: st.session_state.cash_accounts = load_or_migrate_data("cash_accounts", [])
+if "liabilities_accounts" not in st.session_state: st.session_state.liabilities_accounts = load_or_migrate_data("liabilities_accounts", [])
+if "history_snapshots" not in st.session_state: st.session_state.history_snapshots = load_or_migrate_data("history_snapshots", {})
 
 # 狀態管理
 if "selected_category" not in st.session_state: st.session_state.selected_category = None
@@ -313,6 +251,20 @@ def looks_like_ticker(text: str) -> bool:
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
+# ========================================================
+# 📊 UI 渲染開始
+# ========================================================
+st.markdown(
+    """
+    <style>
+    section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
+    div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; }
+    div[data-testid="stButton"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
+    </style>
+    """, unsafe_allow_html=True
+)
+
 def render_cash_manager():
     st.markdown("#### 💵 現金帳戶管理")
     with st.form("cash_form", clear_on_submit=True):
@@ -441,7 +393,7 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                     if not lib_hist_df.empty:
                         fig_lib_line = go.Figure()
                         hover_temp = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if st.session_state.privacy_mode else "%{x|%Y-%m-%d}<br>" + safe_unit + " %{y:,.0f}<extra></extra>"
-                        fig_lib_line.add_trace(go.Scatter(x=lib_hist_df['Date'], y=lib_hist_df['Value'], mode='lines+markers', name='負債總額', line=dict(color='#EF553B', width=3, shape='linear'), marker=dict(size=6, color='#EF553B'), fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp))
+                        fig_lib_line.add_trace(go.Scatter(x=lib_hist_df['Date'], y=lib_hist_df['Value'], mode='lines', name='負債總額', line=dict(color='#EF553B', width=3, shape='linear'), fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp))
                         today_dt = pd.to_datetime(date.today())
                         start_date = today_dt - pd.DateOffset(months=1) if len(lib_hist_df) <= 30 else lib_hist_df['Date'].min() - pd.Timedelta(days=3)
                         fig_lib_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
@@ -476,15 +428,6 @@ if st.session_state.selected_extras:
 st.divider()
 
 with st.sidebar:
-    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
-    if st.button("登出金庫", use_container_width=True):
-        supabase.auth.sign_out()
-        st.session_state.user = None
-        st.session_state.password = None
-        st.cache_data.clear()
-        st.rerun()
-    st.divider()
-    
     st.header("新增交易")
     
     if st.session_state.clear_form:
@@ -941,9 +884,16 @@ else:
         filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
         filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
         
-        # 💡 排列 Y 軸順序，確保在 x unified 的顯示順序永遠墊底
-        filtered_df['pnl_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - 1
-        filtered_df['pct_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - 2
+        # 動態計算 offset，確保 Y 軸排列順序完美
+        y_max = filtered_df[['Value', 'Cost']].max().max()
+        y_min = filtered_df[['Value', 'Cost']].min().min()
+        y_range = y_max - y_min
+        if y_range == 0: y_range = 1
+        offset1 = y_range * 0.005
+        offset2 = y_range * 0.010
+        
+        filtered_df['pnl_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - offset1
+        filtered_df['pct_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - offset2
         
         filtered_df['pnl_y_gain'] = filtered_df.apply(lambda r: r['pnl_y'] if r['PnL'] >= 0 else None, axis=1)
         filtered_df['pnl_y_loss'] = filtered_df.apply(lambda r: r['pnl_y'] if r['PnL'] < 0 else None, axis=1)
@@ -954,56 +904,55 @@ else:
         if not filtered_df.empty:
             fig_line = go.Figure()
             
-            val_name = '淨額' if st.session_state.selected_category is not None else '淨資產'
+            val_name = '淨值' 
             
             if privacy:
-                hover_temp_val = f"＊＊＊＊<extra>{val_name}</extra>"
+                hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
                 hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
-                hover_temp_pnl = "＊＊＊＊<extra><span style='color:#e2e8f0'>損益</span></extra>"
-                hover_temp_pct = "＊＊＊＊<extra><span style='color:#e2e8f0'>百分比</span></extra>"
+                hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
+                hover_temp_pct = "＊＊＊＊<extra>  </extra>"
             else:
-                # 💡 利用原生表格對齊：<extra> 放左欄文字，其餘放右欄
-                hover_temp_val = unit_str + f" %{{y:,.0f}}<extra>{val_name}</extra>"
+                hover_temp_val = unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
                 hover_temp_cost = unit_str + " %{y:,.0f}<extra>成本</extra>"
-                hover_temp_pnl = "%{customdata}<extra><span style='color:#e2e8f0'>損益</span></extra>"
-                hover_temp_pct = "%{customdata}<extra><span style='color:#e2e8f0'>百分比</span></extra>"
+                hover_temp_pnl = "%{customdata}<extra>損益</extra>"
+                hover_temp_pct = "%{customdata}<extra>  </extra>"
 
-            # 1. 隱形軌跡：百分比 (Row 4)
+            # 1. 隱形軌跡：百分比 (Row 4) -> 顯示在最底
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['pct_y_gain'], mode='lines', name='百分比', 
-                line=dict(color='#4ade80', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
+                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
                 hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False
             ))
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['pct_y_loss'], mode='lines', name='百分比', 
-                line=dict(color='#ef4444', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
+                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
                 hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False
             ))
 
-            # 2. 隱形軌跡：損益金額 (Row 3)
+            # 2. 隱形軌跡：損益金額 (Row 3) -> 顯示在第三排
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['pnl_y_gain'], mode='lines', name='損益', 
-                line=dict(color='#4ade80', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
+                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
                 hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False
             ))
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['pnl_y_loss'], mode='lines', name='損益', 
-                line=dict(color='#ef4444', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
+                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
                 hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False
             ))
 
-            # 3. 成本線
+            # 3. 成本線 (Row 2) -> 顯示在第二排
             fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines+markers', name='成本', 
-                line=dict(color='#3b82f6', width=3, shape='linear'), marker=dict(size=6, color='#3b82f6'), 
+                x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', name='成本', 
+                line=dict(color='#3b82f6', width=3, shape='linear'), 
                 hovertemplate=hover_temp_cost
             ))
             
-            # 4. 淨資產線
+            # 4. 淨資產線 (Row 1) -> 顯示在最上面
             fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['Value'], mode='lines+markers', 
+                x=filtered_df['Date'], y=filtered_df['Value'], mode='lines', 
                 name=val_name, 
-                line=dict(color='#00CC96', width=3, shape='linear'), marker=dict(size=6, color='#00CC96'), 
+                line=dict(color='#00CC96', width=3, shape='linear'), 
                 hovertemplate=hover_temp_val
             ))
 
@@ -1196,10 +1145,15 @@ else:
                 daily_data['Value_Gain'] = daily_data[['Value', 'cost']].max(axis=1)
                 daily_data['Value_Loss'] = daily_data[['Value', 'cost']].min(axis=1)
                 
-                # 💡 建立隱形的 Y 軸，讓「損益金額」與「百分比」永遠排在 Tooltip 最下方
-                min_val_ind = daily_data[['Value', 'cost']].min(axis=1)
-                daily_data['pnl_y'] = min_val_ind - 1
-                daily_data['pct_y'] = min_val_ind - 2
+                y_max_ind = daily_data[['Value', 'cost']].max().max()
+                y_min_ind = daily_data[['Value', 'cost']].min().min()
+                y_range_ind = y_max_ind - y_min_ind
+                if y_range_ind == 0: y_range_ind = 1
+                offset1_ind = y_range_ind * 0.005
+                offset2_ind = y_range_ind * 0.010
+
+                daily_data['pnl_y'] = daily_data[['Value', 'cost']].min(axis=1) - offset1_ind
+                daily_data['pct_y'] = daily_data[['Value', 'cost']].min(axis=1) - offset2_ind
 
                 daily_data['pnl_y_gain'] = daily_data.apply(lambda r: r['pnl_y'] if r['pnl'] >= 0 else None, axis=1)
                 daily_data['pnl_y_loss'] = daily_data.apply(lambda r: r['pnl_y'] if r['pnl'] < 0 else None, axis=1)
@@ -1215,52 +1169,51 @@ else:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
                     fig1 = go.Figure()
                     
-                    val_name_ind = '淨額'
+                    val_name_ind = '淨值'
                     if privacy:
-                        hover_val = f"＊＊＊＊<extra>{val_name_ind}</extra>"
+                        hover_val = "＊＊＊＊<extra>" + val_name_ind + "</extra>"
                         hover_cost = "＊＊＊＊<extra>成本</extra>"
-                        hover_pnl = "＊＊＊＊<extra><span style='color:#e2e8f0'>損益</span></extra>"
-                        hover_pct = "＊＊＊＊<extra><span style='color:#e2e8f0'>百分比</span></extra>"
+                        hover_pnl = "＊＊＊＊<extra>損益</extra>"
+                        hover_pct = "＊＊＊＊<extra>  </extra>"
                     else:
-                        # 💡 完美對齊魔法：<extra> 擔任左欄文字，hovertemplate 擔任右欄文字
-                        hover_val = asset_unit_str + f" %{{y:,.0f}}<extra>{val_name_ind}</extra>"
+                        hover_val = asset_unit_str + " %{y:,.0f}<extra>" + val_name_ind + "</extra>"
                         hover_cost = asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
-                        hover_pnl = "%{customdata}<extra><span style='color:#e2e8f0'>損益</span></extra>"
-                        hover_pct = "%{customdata}<extra><span style='color:#e2e8f0'>百分比</span></extra>"
+                        hover_pnl = "%{customdata}<extra>損益</extra>"
+                        hover_pct = "%{customdata}<extra>  </extra>"
                     
                     # 1. 隱形軌跡：百分比 (Row 4)
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['pct_y_gain'], mode='lines', name='百分比', 
-                        line=dict(color='#4ade80', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
+                        line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
                         hovertemplate=hover_pct, showlegend=False, connectgaps=False
                     ))
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['pct_y_loss'], mode='lines', name='百分比', 
-                        line=dict(color='#ef4444', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
+                        line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
                         hovertemplate=hover_pct, showlegend=False, connectgaps=False
                     ))
 
                     # 2. 隱形軌跡：損益金額 (Row 3)
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['pnl_y_gain'], mode='lines', name='損益', 
-                        line=dict(color='#4ade80', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
+                        line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
                         hovertemplate=hover_pnl, showlegend=False, connectgaps=False
                     ))
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['pnl_y_loss'], mode='lines', name='損益', 
-                        line=dict(color='#ef4444', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
+                        line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
                         hovertemplate=hover_pnl, showlegend=False, connectgaps=False
                     ))
 
                     # 3. 成本線
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['cost'], mode='lines+markers', name='成本', 
+                        x=daily_data.index, y=daily_data['cost'], mode='lines', name='成本', 
                         line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
                     ))
                     
                     # 4. 淨值線
                     fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['Value'], mode='lines+markers', name=val_name_ind, 
+                        x=daily_data.index, y=daily_data['Value'], mode='lines', name=val_name_ind, 
                         line=dict(color='#00CC96', width=2), hovertemplate=hover_val
                     ))
 
@@ -1309,7 +1262,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=buys['date_obj'], y=buys['price'], mode='markers', name='買進',
                                 marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')),
-                                customdata=buys['hover'], hovertemplate="%{customdata}<extra></extra>"
+                                customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
                             ))
                             
                         if not sells.empty:
@@ -1318,7 +1271,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出',
                                 marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')),
-                                customdata=sells['hover'], hovertemplate="%{customdata}<extra></extra>"
+                                customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
                             ))
                             
                         fig2.update_layout(
@@ -1331,7 +1284,7 @@ else:
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
     st.divider()
-    st.subheader("交易紀錄管理")
+    st.交易紀錄管理(tx_df)
     if st.session_state.transactions:
         tx_df = pd.DataFrame(st.session_state.transactions)
         tx_df["date_obj"] = pd.to_datetime(tx_df["date"]).dt.date
