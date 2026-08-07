@@ -923,28 +923,41 @@ else:
         
         filtered_df['pnl_text'] = filtered_df['PnL'].apply(lambda x: f"<span style='color:#ef4444'>-{abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{x:,.0f}</span>" if x > 0 else "0")
 
+        # 💡 為圖表建立填色的輔助邊界
+        filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
+        filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
+
         if not filtered_df.empty:
             fig_line = go.Figure()
             unit_str = unit.replace("$", "&#36;")
             
             if privacy:
                 hover_temp_val = "＊＊＊＊<extra></extra>"
-                hover_temp_pnl = "＊＊＊＊<extra></extra>"
+                hover_temp_cost = "＊＊＊＊<extra></extra>"
+                hover_temp_pnl = "損益金額: ＊＊＊＊<extra></extra>"
             else:
                 hover_temp_val = unit_str + " %{y:,.0f}<extra></extra>"
-                hover_temp_pnl = unit_str + " %{customdata}<extra></extra>"
+                hover_temp_cost = unit_str + " %{y:,.0f}<extra></extra>"
+                hover_temp_pnl = "損益金額: %{customdata}<extra></extra>"
 
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value'], mode='lines+markers', name='淨額' if st.session_state.selected_category is not None else '淨資產', line=dict(color='#00CC96', width=3, shape='linear'), marker=dict(size=6, color='#00CC96'), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp_val))
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines+markers', name='成本', line=dict(color='#3b82f6', width=3, shape='linear'), marker=dict(size=6, color='#3b82f6'), hovertemplate=hover_temp_val))
+            # 1. 黃色區塊 (獲利) 的基準線
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+            # 2. 黃色區塊 (獲利) 的填色區間
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+
+            # 3. 紅色區塊 (虧損) 的基準線
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+            # 4. 紅色區塊 (虧損) 的填色區間
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
+
+            # 5. 繪製真實的「成本線」 (對應說明框的第二層)
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines+markers', name='成本', line=dict(color='#3b82f6', width=3, shape='linear'), marker=dict(size=6, color='#3b82f6'), hovertemplate=hover_temp_cost))
             
-            fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['PnL'], mode='lines+markers', name='累積損益', 
-                line=dict(color='#FFC107', width=3, shape='linear', dash='dash'), 
-                marker=dict(size=6, color='#FFC107'), 
-                fill='tozeroy', fillcolor='rgba(255, 193, 7, 0.1)',
-                customdata=filtered_df['pnl_text'] if not privacy else None, 
-                hovertemplate=hover_temp_pnl
-            ))
+            # 6. 繪製真實的「淨值線」 (對應說明框的第一層)
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value'], mode='lines+markers', name='淨額' if st.session_state.selected_category is not None else '淨資產', line=dict(color='#00CC96', width=3, shape='linear'), marker=dict(size=6, color='#00CC96'), hovertemplate=hover_temp_val))
+
+            # 7. 隱形的損益文字軌跡 (對應說明框的第三層)
+            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', name='損益金額', line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_text'] if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False))
 
             fig_line.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, end_date], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy, autorange=True), hovermode="x unified", dragmode="pan")
             st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
@@ -1107,6 +1120,10 @@ else:
                 daily_data["pnl"] = daily_data["Value"] - daily_data["cost"]
                 daily_data["pnl_text"] = daily_data["pnl"].apply(lambda x: f"<span style='color:#ef4444'>-{abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{x:,.0f}</span>" if x > 0 else "0")
 
+                # 💡 為個別圖表建立填色的輔助邊界
+                daily_data['Value_Gain'] = daily_data[['Value', 'cost']].max(axis=1)
+                daily_data['Value_Loss'] = daily_data[['Value', 'cost']].min(axis=1)
+
                 st.markdown(f"*(註: 以下圖表皆以該標的原始計價幣別 **{asset_currency}** 呈現，不受匯率波動影響)*")
                 
                 c_chart1, c_chart2 = st.columns(2)
@@ -1122,18 +1139,29 @@ else:
                     else:
                         hover_val = "%{y:,.0f}<extra></extra>"
                         hover_cost = "%{y:,.0f}<extra></extra>"
-                        # 💡 [修正] 加上「損益金額：」字樣
                         hover_pnl = "損益金額: %{customdata}<extra></extra>"
                     
-                    fig1.add_trace(go.Scatter(
-                        x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', 
-                        line=dict(color='#00CC96', width=2), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', 
-                        hovertemplate=hover_val
-                    ))
+                    # 1. 黃色區塊 (獲利) 的基準線
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+                    # 2. 黃色區塊 (獲利) 的填色區間
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+
+                    # 3. 紅色區塊 (虧損) 的基準線
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+                    # 4. 紅色區塊 (虧損) 的填色區間
+                    fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
+
+                    # 5. 繪製真實的「成本線」
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', 
                         line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
                     ))
+                    # 6. 繪製真實的「淨值線」
+                    fig1.add_trace(go.Scatter(
+                        x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', 
+                        line=dict(color='#00CC96', width=2), hovertemplate=hover_val
+                    ))
+                    # 7. 隱形的損益文字軌跡
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['cost'], mode='lines', name='損益金額', 
                         line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_text'] if not privacy else None, 
