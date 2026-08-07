@@ -921,7 +921,6 @@ else:
         filtered_df = hist_df[hist_df['Date'] >= start_date].copy()
         filtered_df['PnL'] = filtered_df['Value'] - filtered_df['Cost']
         
-        # 💡 [優化] 為大圖表的損益曲線套用帶顏色的 HTML 標籤
         filtered_df['pnl_text'] = filtered_df['PnL'].apply(lambda x: f"<span style='color:#ef4444'>-{abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{x:,.0f}</span>" if x > 0 else "0")
 
         if not filtered_df.empty:
@@ -938,7 +937,6 @@ else:
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value'], mode='lines+markers', name='淨額' if st.session_state.selected_category is not None else '淨資產', line=dict(color='#00CC96', width=3, shape='linear'), marker=dict(size=6, color='#00CC96'), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp_val))
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines+markers', name='成本', line=dict(color='#3b82f6', width=3, shape='linear'), marker=dict(size=6, color='#3b82f6'), hovertemplate=hover_temp_val))
             
-            # 💡 [新增] 累積損益曲線：黃色虛線、底部淺黃色填充
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['PnL'], mode='lines+markers', name='累積損益', 
                 line=dict(color='#FFC107', width=3, shape='linear', dash='dash'), 
@@ -1106,7 +1104,6 @@ else:
                     daily_data["Close"] = None
                     daily_data["Value"] = daily_data["cost"] 
                 
-                # 💡 [新增] 動態著色的損益文字 (針對個別標的圖表)
                 daily_data["pnl"] = daily_data["Value"] - daily_data["cost"]
                 daily_data["pnl_text"] = daily_data["pnl"].apply(lambda x: f"<span style='color:#ef4444'>-{abs(x):,.0f}</span>" if x < 0 else f"<span style='color:#4ade80'>+{x:,.0f}</span>" if x > 0 else "0")
 
@@ -1118,15 +1115,15 @@ else:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
                     fig1 = go.Figure()
                     
-                    # 💡 [優化] 利用隱形軌跡確保排版完美對齊，不破壞 x unified 原生表格結構
                     if privacy:
                         hover_val = "＊＊＊＊<extra></extra>"
                         hover_cost = "＊＊＊＊<extra></extra>"
-                        hover_pnl = "＊＊＊＊<extra></extra>"
+                        hover_pnl = "損益金額: ＊＊＊＊<extra></extra>"
                     else:
                         hover_val = "%{y:,.0f}<extra></extra>"
                         hover_cost = "%{y:,.0f}<extra></extra>"
-                        hover_pnl = "%{customdata}<extra></extra>"
+                        # 💡 [修正] 加上「損益金額：」字樣
+                        hover_pnl = "損益金額: %{customdata}<extra></extra>"
                     
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['Value'], mode='lines', name='持倉現值', 
@@ -1137,7 +1134,6 @@ else:
                         x=daily_data.index, y=daily_data['cost'], mode='lines', name='投入成本', 
                         line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
                     ))
-                    # 新增隱形軌跡，專門用來在 tooltip 產生完美的第三行（顯示損益金額）
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['cost'], mode='lines', name='損益金額', 
                         line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_text'] if not privacy else None, 
@@ -1203,7 +1199,7 @@ else:
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
     st.divider()
-    st.交易紀錄管理(tx_df)
+    st.subheader("交易紀錄管理")
     if st.session_state.transactions:
         tx_df = pd.DataFrame(st.session_state.transactions)
         tx_df["date_obj"] = pd.to_datetime(tx_df["date"]).dt.date
