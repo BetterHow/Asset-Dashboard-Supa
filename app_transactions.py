@@ -134,7 +134,7 @@ st.markdown(
 st.title("📊 個人資產儀表板（端到端加密版）")
 st.caption("支援買進 / 賣出 / SP / CC / 配息｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
 
-# 初始化載入資料
+# 初始化載入資料 (從 Supabase 解密)
 if "transactions" not in st.session_state: st.session_state.transactions = load_data("transactions", [])
 if "manual_prices" not in st.session_state: st.session_state.manual_prices = load_data("manual_prices", {})
 if "cash_accounts" not in st.session_state: st.session_state.cash_accounts = load_data("cash_accounts", [])
@@ -425,6 +425,10 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
         if st.session_state.liabilities_accounts:
             lib_items = [{"id": lib["id"], "名稱": lib["name"], "幣別": lib["currency"], "原始金額": lib["balance"], "TWD金額": lib["balance"] if lib["currency"] == "TWD" else lib["balance"] * usd_twd} for lib in st.session_state.liabilities_accounts]
             lib_df = pd.DataFrame(lib_items)
+            
+            # 💡 [修正] 補回計算「顯示金額」的邏輯
+            lib_df["顯示金額"] = lib_df["TWD金額"] if display_currency == "TWD" else lib_df["TWD金額"] / usd_twd if display_currency == "USD" else (lib_df["TWD金額"] / usd_twd) / btc_usd if btc_usd else lib_df["TWD金額"]
+            
             # 依照顯示金額 (折算後) 由大到小排序
             lib_df = lib_df.sort_values(by="顯示金額", ascending=False)
             lib_total_display = lib_df["顯示金額"].sum()
@@ -1003,7 +1007,6 @@ else:
         filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
         filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
         
-        # 動態計算 offset，確保 Y 軸排列順序完美
         y_max = filtered_df[['Value', 'Cost']].max().max()
         y_min = filtered_df[['Value', 'Cost']].min().min()
         y_range = y_max - y_min
@@ -1294,7 +1297,6 @@ else:
                         hover_pnl = "＊＊＊＊<extra>損益</extra>"
                         hover_pct = "＊＊＊＊<extra>$$ %</extra>"
                     else:
-                        # 💡 完美切齊魔法
                         hover_val = " : " + asset_unit_str + " %{y:,.0f}<extra>" + val_name_ind + "</extra>"
                         hover_cost = " : " + asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
                         hover_pnl = " : %{customdata}<extra>損益</extra>"
