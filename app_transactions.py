@@ -50,15 +50,6 @@ def decrypt_data(encrypted_str: str, password: str):
 
 def save_data(category, data):
     """上傳加密資料到 Supabase，同時在本地自動備份明文 JSON"""
-    # 1. 自動本地備份 (防丟失防線)
-    try:
-        local_filename = f"{category}_backup.json"
-        with open(local_filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception:
-        pass # 本地備份若因權限問題失敗，不中斷主流程
-        
-    # 2. 雲端加密儲存
     try:
         enc_payload = encrypt_data(data, st.session_state.password)
         res = supabase.table("encrypted_vault").select("id").eq("user_id", st.session_state.user.id).eq("category", category).execute()
@@ -134,7 +125,6 @@ st.markdown(
     <style>
     section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
     
-    /* 僅將側邊欄收折/展開按鈕設定為固定，避免誤傷右上角系統選單 */
     div[data-testid="collapsedControl"], 
     button[data-testid="stSidebarCollapseButton"] {
         position: fixed !important; 
@@ -321,6 +311,35 @@ def looks_like_ticker(text: str) -> bool:
     return bool(re.fullmatch(r"[A-Z0-9.\-]{1,15}", text.strip().upper()))
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
+
+# ========================================================
+# ⚙️ 動態數量小數點格式化引擎
+# ========================================================
+def format_dynamic_qty(qty, price, currency):
+    """依照單價高低，動態決定『數量』的顯示小數位數"""
+    if pd.isna(qty) or qty is None: return "—"
+    try: qty_val = float(qty)
+    except: return str(qty)
+    
+    try: price_val = float(price)
+    except: price_val = 0.0
+    
+    # 換算為 USD 進行標準化比較
+    if currency == "TWD": price_usd = price_val / usd_twd
+    elif currency == "BTC": price_usd = price_val * (btc_usd if btc_usd else 95000.0)
+    else: price_usd = price_val
+    
+    # 嚴格套用單價門檻規則
+    if price_usd >= 10000: decimals = 4
+    elif price_usd >= 5000: decimals = 3
+    elif price_usd >= 1500: decimals = 2
+    elif price_usd >= 500: decimals = 1
+    else:
+        # 單價低於 500 美金的標的
+        if qty_val % 1 != 0: decimals = 2  # 若有碎股，最多顯示到小數第2位
+        else: decimals = 0                 # 整股直接顯示整數
+            
+    return f"{qty_val:,.{decimals}f}"
 
 def render_cash_manager(unit, display_currency):
     with st.expander("💵 現金總覽", expanded=False):
@@ -582,7 +601,7 @@ with st.sidebar:
         "元大美債20年": "00679B", "國泰20年美債": "00687B", "群益ESG投等債20+": "00937B",
         "中信高評級公司債": "00772B", "元大投資級公司債": "00720B",
         "元大台灣50正2": "00631L", "富邦台灣加權正2": "00675L", "國泰台灣加權正2": "00663L",
-        "台積電": "2330", "鸿海": "2317", "聯發科": "2454", "廣達": "2382", 
+        "台積電": "2330", "鴻海": "2317", "聯發科": "2454", "廣達": "2382", 
         "台達電": "2308", "中華電": "2412", "日月光投控": "3711", "聯電": "2303", 
         "華碩": "2357", "宏碁": "2353", "技嘉": "2376", "微星": "2377", 
         "緯創": "3231", "緯穎": "6669", "英業達": "2356", "和碩": "4938", 
@@ -850,11 +869,13 @@ else:
         for i, (_, row) in enumerate(category_summary.iterrows()):
             col = cols[i % num_cols]
             cat, amount, pnl, cost = row["類型"], fmt_total(row["顯示現值"], display_currency), row["顯示損益"], row["顯示總成本"]
-            cat_pnl_pct = (pnl / cost * 100) if cost > 0 else 0
             
             if cost <= 0 and pnl > 0:
                 pct_display_str = "∞%"
+            elif cost <= 0 and pnl <= 0:
+                pct_display_str = "0.0%"
             else:
+                cat_pnl_pct = (pnl / cost * 100)
                 pct_display_str = f"{abs(cat_pnl_pct):.1f}%"
                 
             pnl_str, pnl_sign = fmt_total(abs(pnl), display_currency), "+" if pnl > 0 else "-" if pnl < 0 else ""
@@ -1060,7 +1081,6 @@ else:
                 hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
                 hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
 
-            # 1. 隱形軌跡：百分比 (Row 4) -> 顯示在最底
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['pct_y_gain'], mode='lines', name='百分比', 
                 line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
@@ -1072,7 +1092,6 @@ else:
                 hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False
             ))
 
-            # 2. 隱形軌跡：損益金額 (Row 3) -> 顯示在第三排
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['pnl_y_gain'], mode='lines', name='損益', 
                 line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
@@ -1084,14 +1103,12 @@ else:
                 hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False
             ))
 
-            # 3. 成本線 (Row 2) -> 顯示在第二排
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', name='成本', 
                 line=dict(color='#3b82f6', width=3, shape='linear'), 
                 hovertemplate=hover_temp_cost
             ))
             
-            # 4. 淨資產線 (Row 1) -> 顯示在最上面
             fig_line.add_trace(go.Scatter(
                 x=filtered_df['Date'], y=filtered_df['Value'], mode='lines', 
                 name=val_name, 
@@ -1099,11 +1116,9 @@ else:
                 hovertemplate=hover_temp_val
             ))
 
-            # 5. 獲利填色區間 (黃色)
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
 
-            # 6. 虧損填色區間 (紅色)
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
             fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
 
@@ -1117,8 +1132,15 @@ else:
     with st.expander("點此展開 / 收合明細表", expanded=False):
         detail_df = df[df["類型"] == st.session_state.selected_category] if is_category_view else df
         
+        def get_qty_format_for_holdings(r):
+            if r.get("is_cash"):
+                return f"{r['數量']:,.0f}" if r["幣別"] == "TWD" else f"{r['數量']:,.2f}"
+            price = r["現價"] if pd.notna(r["現價"]) and r["現價"] is not None else r["平均成本"]
+            return format_dynamic_qty(r["數量"], price, r["幣別"])
+            
         show_df = pd.DataFrame({
-            "名稱": detail_df["名稱"], "代號": detail_df["代號"], "類型": detail_df["類型"], "幣別": detail_df["幣別"], "數量": detail_df["數量"],
+            "名稱": detail_df["名稱"], "代號": detail_df["代號"], "類型": detail_df["類型"], "幣別": detail_df["幣別"], 
+            "數量": detail_df.apply(get_qty_format_for_holdings, axis=1),
             "平均成本": detail_df.apply(lambda r: None if r.get("is_cash") else r["平均成本"], axis=1),
             "調整後成本": detail_df.apply(lambda r: None if r.get("is_cash") else r["調整後成本"], axis=1),
             "現價": detail_df.apply(lambda r: None if r.get("is_cash") else r["現價"], axis=1),
@@ -1150,7 +1172,7 @@ else:
             st.dataframe(privacy_df, use_container_width=True, hide_index=True)
         else:
             col_cfg = {
-                "數量": st.column_config.NumberColumn("數量", format="%.0f"), 
+                "數量": st.column_config.TextColumn("數量"), 
                 "平均成本": st.column_config.NumberColumn("平均成本", format="%.2f"),
                 "調整後成本": st.column_config.NumberColumn("調整後成本", format="%.2f"),
                 "現價": st.column_config.NumberColumn("現價", format="%.2f"), 
@@ -1327,7 +1349,6 @@ else:
                         hover_pnl = " : %{customdata}<extra>損益</extra>"
                         hover_pct = " : %{customdata}<extra>$$ %</extra>"
                     
-                    # 1. 隱形軌跡：百分比 (Row 4)
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['pct_y_gain'], mode='lines', name='百分比', 
                         line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
@@ -1339,7 +1360,6 @@ else:
                         hovertemplate=hover_pct, showlegend=False, connectgaps=False
                     ))
 
-                    # 2. 隱形軌跡：損益金額 (Row 3)
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['pnl_y_gain'], mode='lines', name='損益', 
                         line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
@@ -1351,23 +1371,19 @@ else:
                         hovertemplate=hover_pnl, showlegend=False, connectgaps=False
                     ))
 
-                    # 3. 成本線
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['cost'], mode='lines', name='成本', 
                         line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
                     ))
                     
-                    # 4. 淨值線
                     fig1.add_trace(go.Scatter(
                         x=daily_data.index, y=daily_data['Value'], mode='lines', name=val_name_ind, 
                         line=dict(color='#00CC96', width=2), hovertemplate=hover_val
                     ))
 
-                    # 5. 獲利填色區間 (黃色)
                     fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
 
-                    # 6. 虧損填色區間 (紅色)
                     fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
@@ -1408,7 +1424,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=buys['date_obj'], y=buys['price'], mode='markers', name='買進',
                                 marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')),
-                                customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
+                                customdata=buys['hover'], hovertemplate="%{customdata}<extra></extra>"
                             ))
                             
                         if not sells.empty:
@@ -1417,7 +1433,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出',
                                 marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')),
-                                customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
+                                customdata=sells['hover'], hovertemplate="%{customdata}<extra></extra>"
                             ))
                             
                         fig2.update_layout(
@@ -1489,7 +1505,12 @@ else:
                             st.rerun()
                 else:
                     c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
-                    qty_display, price_display = ("＊＊＊＊", "＊＊＊＊") if privacy else (fmt(row['quantity']), fmt(row['price']))
+                    if privacy:
+                        qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
+                    else:
+                        qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
+                        price_display = fmt(row['price'])
+                        
                     with c1: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['date']}</div>", unsafe_allow_html=True)
                     with c2: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['type']}</div>", unsafe_allow_html=True)
                     with c3: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['name']}（{row['ticker']}）</div>", unsafe_allow_html=True)
