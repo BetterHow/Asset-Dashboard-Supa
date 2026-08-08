@@ -124,14 +124,7 @@ st.markdown(
     """
     <style>
     section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
-    
-    /* 僅將側邊欄收折/展開按鈕設定為固定，避免誤傷右上角系統選單 */
-    div[data-testid="collapsedControl"], 
-    button[data-testid="stSidebarCollapseButton"] {
-        position: fixed !important; 
-        top: 10px !important; 
-        z-index: 999999;
-    }
+    div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; }
     div[data-testid="stButton"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
     </style>
@@ -141,7 +134,7 @@ st.markdown(
 st.title("📊 個人資產儀表板（端到端加密版）")
 st.caption("支援買進 / 賣出 / SP / CC / 配息｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
 
-# 初始化載入資料 (從 Supabase 解密)
+# 初始化載入資料
 if "transactions" not in st.session_state: st.session_state.transactions = load_data("transactions", [])
 if "manual_prices" not in st.session_state: st.session_state.manual_prices = load_data("manual_prices", {})
 if "cash_accounts" not in st.session_state: st.session_state.cash_accounts = load_data("cash_accounts", [])
@@ -324,6 +317,8 @@ def render_cash_manager(unit, display_currency):
                 cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "顯示金額": disp_bal})
             
             cash_df = pd.DataFrame(cash_df_list)
+            # 依照顯示金額 (折算後) 由大到小排序
+            cash_df = cash_df.sort_values(by="顯示金額", ascending=False)
             cash_total_display = cash_df["顯示金額"].sum()
         else:
             cash_df = pd.DataFrame()
@@ -354,7 +349,13 @@ def render_cash_manager(unit, display_currency):
                     else: st.warning("請輸入有效的餘額數字。")
                     
         if st.session_state.cash_accounts:
-            for acc in st.session_state.cash_accounts:
+            # 列表依照 TWD 價值由大到小排序
+            sorted_cash_accounts = sorted(
+                st.session_state.cash_accounts,
+                key=lambda x: x["balance"] if x["currency"] == "TWD" else x["balance"] * usd_twd,
+                reverse=True
+            )
+            for acc in sorted_cash_accounts:
                 if st.session_state.edit_cash_id == acc["id"]:
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
                     new_name = c1.text_input("名稱", acc["name"], key=f"c_name_{acc['id']}", label_visibility="collapsed")
@@ -424,7 +425,8 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
         if st.session_state.liabilities_accounts:
             lib_items = [{"id": lib["id"], "名稱": lib["name"], "幣別": lib["currency"], "原始金額": lib["balance"], "TWD金額": lib["balance"] if lib["currency"] == "TWD" else lib["balance"] * usd_twd} for lib in st.session_state.liabilities_accounts]
             lib_df = pd.DataFrame(lib_items)
-            lib_df["顯示金額"] = lib_df["TWD金額"] if display_currency == "TWD" else lib_df["TWD金額"] / usd_twd if display_currency == "USD" else (lib_df["TWD金額"] / usd_twd) / btc_usd if btc_usd else lib_df["TWD金額"]
+            # 依照顯示金額 (折算後) 由大到小排序
+            lib_df = lib_df.sort_values(by="顯示金額", ascending=False)
             lib_total_display = lib_df["顯示金額"].sum()
 
         safe_unit = unit.replace("$", "&#36;")
@@ -448,7 +450,13 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                     else: st.warning("請輸入有效的金額數字。")
                         
         if st.session_state.liabilities_accounts:
-            for acc in st.session_state.liabilities_accounts:
+            # 列表依照 TWD 價值由大到小排序
+            sorted_liabilities = sorted(
+                st.session_state.liabilities_accounts,
+                key=lambda acc: acc["balance"] if acc["currency"] == "TWD" else acc["balance"] * usd_twd,
+                reverse=True
+            )
+            for acc in sorted_liabilities:
                 if st.session_state.edit_liability_id == acc["id"]:
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
                     new_name = c1.text_input("名稱", acc["name"], key=f"lib_name_{acc['id']}", label_visibility="collapsed")
@@ -923,7 +931,7 @@ else:
                         hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
                         marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
                     )])
-                    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
                     st.plotly_chart(fig, use_container_width=True)
 
@@ -1023,10 +1031,10 @@ else:
                 hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
                 hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
             else:
-                hover_temp_val = unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
-                hover_temp_cost = unit_str + " %{y:,.0f}<extra>成本</extra>"
-                hover_temp_pnl = "%{customdata}<extra>損益</extra>"
-                hover_temp_pct = "%{customdata}<extra>$$ %</extra>"
+                hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
+                hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
+                hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
+                hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
 
             # 1. 隱形軌跡：百分比 (Row 4) -> 顯示在最底
             fig_line.add_trace(go.Scatter(
@@ -1286,10 +1294,11 @@ else:
                         hover_pnl = "＊＊＊＊<extra>損益</extra>"
                         hover_pct = "＊＊＊＊<extra>$$ %</extra>"
                     else:
-                        hover_val = asset_unit_str + " %{y:,.0f}<extra>" + val_name_ind + "</extra>"
-                        hover_cost = asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
-                        hover_pnl = "%{customdata}<extra>損益</extra>"
-                        hover_pct = "%{customdata}<extra>$$ %</extra>"
+                        # 💡 完美切齊魔法
+                        hover_val = " : " + asset_unit_str + " %{y:,.0f}<extra>" + val_name_ind + "</extra>"
+                        hover_cost = " : " + asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
+                        hover_pnl = " : %{customdata}<extra>損益</extra>"
+                        hover_pct = " : %{customdata}<extra>$$ %</extra>"
                     
                     # 1. 隱形軌跡：百分比 (Row 4)
                     fig1.add_trace(go.Scatter(
@@ -1350,10 +1359,10 @@ else:
                         st.warning("無法取得此標的之歷史報價，僅能繪製成本變化圖。")
                     else:
                         fig2 = go.Figure()
-                        hover_temp2 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>收盤價: %{y:,.2f}<extra></extra>"
+                        hover_temp2 = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
                         fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
                         
-                        hover_temp_avg = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>平均成本: %{y:,.2f}<extra></extra>"
+                        hover_temp_avg = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
                         fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
                         
                         buys = asset_tx[asset_tx['type'] == '買進'].copy()
@@ -1372,7 +1381,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=buys['date_obj'], y=buys['price'], mode='markers', name='買進',
                                 marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')),
-                                customdata=buys['hover'], hovertemplate="%{customdata}<extra></extra>"
+                                customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
                             ))
                             
                         if not sells.empty:
@@ -1381,7 +1390,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出',
                                 marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')),
-                                customdata=sells['hover'], hovertemplate="%{customdata}<extra></extra>"
+                                customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
                             ))
                             
                         fig2.update_layout(
