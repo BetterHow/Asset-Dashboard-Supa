@@ -313,55 +313,109 @@ def looks_like_ticker(text: str) -> bool:
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
-def render_cash_manager():
-    st.markdown("#### 💵 現金帳戶管理")
-    with st.form("cash_form", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-        with c1: new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
-        with c2: new_cash_curr = st.selectbox("幣別", ["TWD", "USD"])
-        with c3: new_cash_bal = st.text_input("目前餘額")
-        with c4:
-            st.write("")
-            submitted = st.form_submit_button("新增", use_container_width=True)
-        if submitted:
-            if new_cash_name and new_cash_bal:
-                bal = safe_float(new_cash_bal)
-                if bal is not None:
-                    st.session_state.cash_accounts.append({"id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "name": new_cash_name.strip(), "currency": new_cash_curr, "balance": bal})
-                    save_data("cash_accounts", st.session_state.cash_accounts)
-                    st.success("已成功新增現金帳戶！")
-                    st.rerun()
-                else: st.warning("請輸入有效的餘額數字。")
+def render_cash_manager(unit, display_currency):
+    with st.expander("💵 現金總覽", expanded=False):
+        cash_total_display = 0
+        cash_df_list = []
+        if st.session_state.cash_accounts:
+            for acc in st.session_state.cash_accounts:
+                twd_bal = acc["balance"] if acc["currency"] == "TWD" else acc["balance"] * usd_twd
+                disp_bal = twd_bal if display_currency == "TWD" else twd_bal / usd_twd if display_currency == "USD" else (twd_bal / usd_twd) / btc_usd if btc_usd else twd_bal
+                cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "顯示金額": disp_bal})
+            
+            cash_df = pd.DataFrame(cash_df_list)
+            cash_total_display = cash_df["顯示金額"].sum()
+        else:
+            cash_df = pd.DataFrame()
+
+        safe_unit = unit.replace("$", "&#36;")
+        cash_str = f"{safe_unit} {fmt_total(cash_total_display, display_currency)}"
+        
+        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(cash_str)}</div>", unsafe_allow_html=True)
+        
+        with st.form("cash_form", clear_on_submit=True):
+            c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+            with c1: new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
+            with c2: new_cash_curr = st.selectbox("幣別", ["TWD", "USD"], key="cash_curr_box")
+            with c3: new_cash_bal = st.text_input("目前餘額")
+            with c4:
+                st.write("")
+                if st.form_submit_button("新增帳戶", use_container_width=True):
+                    if new_cash_name and safe_float(new_cash_bal) is not None:
+                        st.session_state.cash_accounts.append({
+                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                            "name": new_cash_name.strip(), 
+                            "currency": new_cash_curr, 
+                            "balance": safe_float(new_cash_bal)
+                        })
+                        save_data("cash_accounts", st.session_state.cash_accounts)
+                        st.success("已成功新增現金帳戶！")
+                        st.rerun()
+                    else: st.warning("請輸入有效的餘額數字。")
                     
-    if st.session_state.cash_accounts:
-        st.markdown("##### 目前持有的現金部位")
-        for acc in st.session_state.cash_accounts:
-            if st.session_state.edit_cash_id == acc["id"]:
-                c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
-                new_name = c1.text_input("名稱", acc["name"], key=f"name_{acc['id']}", label_visibility="collapsed")
-                new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"curr_{acc['id']}", label_visibility="collapsed")
-                new_bal = c3.text_input("餘額", str(acc["balance"]), key=f"bal_{acc['id']}", label_visibility="collapsed")
-                if c4.button("儲存", key=f"save_{acc['id']}", type="primary", use_container_width=True):
-                    acc["name"], acc["currency"] = new_name.strip() if new_name.strip() else acc["name"], new_curr
-                    if safe_float(new_bal) is not None: acc["balance"] = safe_float(new_bal)
-                    save_data("cash_accounts", st.session_state.cash_accounts)
-                    st.session_state.edit_cash_id = None
-                    st.rerun()
-                if c5.button("取消", key=f"cancel_{acc['id']}", use_container_width=True):
-                    st.session_state.edit_cash_id = None
-                    st.rerun()
-            else:
-                c1, c2, c3, c4 = st.columns([3.5, 5.0, 0.8, 0.8])
-                c1.markdown(f"<div style='font-size:19px; font-weight:bold; margin-top:4px;'>{acc['name']}</div>", unsafe_allow_html=True)
-                c2.markdown(f"<div style='font-size:19px; margin-top:4px;'>{acc['currency']} {mask_val(fmt(acc['balance']))}</div>", unsafe_allow_html=True)
-                if c3.button("編輯", key=f"edit_cash_{acc['id']}", use_container_width=True):
-                    st.session_state.edit_cash_id = acc["id"]
-                    st.rerun()
-                if c4.button("刪除", key=f"del_cash_{acc['id']}", use_container_width=True):
-                    st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
-                    save_data("cash_accounts", st.session_state.cash_accounts)
-                    st.rerun()
-    st.divider()
+        if st.session_state.cash_accounts:
+            for acc in st.session_state.cash_accounts:
+                if st.session_state.edit_cash_id == acc["id"]:
+                    c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
+                    new_name = c1.text_input("名稱", acc["name"], key=f"c_name_{acc['id']}", label_visibility="collapsed")
+                    new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"c_curr_{acc['id']}", label_visibility="collapsed")
+                    new_bal = c3.text_input("餘額", str(acc["balance"]), key=f"c_bal_{acc['id']}", label_visibility="collapsed")
+                    if c4.button("儲存", key=f"save_c_{acc['id']}", type="primary", use_container_width=True):
+                        acc["name"], acc["currency"] = new_name.strip() if new_name.strip() else acc["name"], new_curr
+                        if safe_float(new_bal) is not None: acc["balance"] = safe_float(new_bal)
+                        save_data("cash_accounts", st.session_state.cash_accounts)
+                        st.session_state.edit_cash_id = None
+                        st.rerun()
+                    if c5.button("取消", key=f"cancel_c_{acc['id']}", use_container_width=True):
+                        st.session_state.edit_cash_id = None
+                        st.rerun()
+                else:
+                    c1, c2, c3, c4 = st.columns([3.5, 5.0, 0.8, 0.8])
+                    c1.markdown(f"<div style='font-size:19px; font-weight:bold; margin-top:4px;'>{acc['name']}</div>", unsafe_allow_html=True)
+                    c2.markdown(f"<div style='font-size:19px; margin-top:4px;'>{acc['currency']} {mask_val(fmt(acc['balance']))}</div>", unsafe_allow_html=True)
+                    if c3.button("編輯", key=f"edit_c_{acc['id']}", use_container_width=True):
+                        st.session_state.edit_cash_id = acc["id"]
+                        st.rerun()
+                    if c4.button("刪除", key=f"del_c_{acc['id']}", use_container_width=True):
+                        st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
+                        save_data("cash_accounts", st.session_state.cash_accounts)
+                        st.rerun()
+
+            st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+            if not cash_df.empty and cash_total_display > 0:
+                c_chart_left, c_chart_right = st.columns([1.5, 1.0])
+                with c_chart_left:
+                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 現金變化趨勢</div>", unsafe_allow_html=True)
+                    history_data = st.session_state.history_snapshots
+                    if len(history_data) > 0:
+                        cash_hist = []
+                        for d_str, data_val in history_data.items():
+                            if isinstance(data_val, dict) and data_val.get("version") == "v2":
+                                c_val = data_val.get(display_currency, data_val.get("TWD")).get("categories", {}).get("現金", {}).get("value", 0.0)
+                                cash_hist.append({'Date': d_str, 'Value': c_val})
+                            else:
+                                c_val = data_val.get("categories", {}).get("現金", {}).get("value", 0.0) if isinstance(data_val, dict) else 0.0
+                                div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+                                cash_hist.append({'Date': d_str, 'Value': c_val / div})
+                                
+                        cash_hist_df = pd.DataFrame(cash_hist).sort_values('Date')
+                        if not cash_hist_df.empty and cash_hist_df['Value'].sum() > 0:
+                            fig_cash_line = go.Figure()
+                            hover_temp = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if st.session_state.privacy_mode else "%{x|%Y-%m-%d}<br>" + safe_unit + " %{y:,.0f}<extra></extra>"
+                            fig_cash_line.add_trace(go.Scatter(x=cash_hist_df['Date'], y=cash_hist_df['Value'], mode='lines', name='現金總額', line=dict(color='#00CC96', width=3, shape='linear'), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp))
+                            today_dt = pd.to_datetime(date.today())
+                            start_date = today_dt - pd.DateOffset(months=1) if len(cash_hist_df) <= 30 else cash_hist_df['Date'].min() - pd.Timedelta(days=3)
+                            fig_cash_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
+                            st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
+                        else:
+                            st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+                    else:
+                        st.caption("尚無歷史資料。")
+                with c_chart_right:
+                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 現金分佈佔比</div>", unsafe_allow_html=True)
+                    fig_cash = go.Figure(data=[go.Pie(labels=cash_df["名稱"], values=cash_df["顯示金額"], pull=[0.03]*len(cash_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#00CC96", "#AB63FA", "#FFA15A", "#636EFA", "#EF553B"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<extra></extra>" if st.session_state.privacy_mode else "%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>")])
+                    fig_cash.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(fig_cash, use_container_width=True)
 
 def render_liability_manager(unit, display_currency, total_value, net_value):
     with st.expander("💳 負債總覽", expanded=False):
@@ -635,7 +689,6 @@ for acc in st.session_state.cash_accounts:
 
 if not holdings:
     st.info("目前沒有持倉或現金。請從左側新增第一筆交易，或在下方新增現金帳戶。")
-    render_cash_manager()
 else:
     for h in holdings:
         if h.get("is_cash"):
@@ -753,6 +806,7 @@ else:
     m3.metric("負債總額", mask_val(f"{unit.replace('&#36;', '$')} {fmt_total(total_liability_display, display_currency)}"))
     m4.metric("未實現損益", mask_val(f"{unit.replace('&#36;', '$')} {fmt_total(net_pnl, display_currency)}"), delta=f"{net_pnl_pct:.1f}%")
 
+    render_cash_manager(unit, display_currency)
     render_liability_manager(unit, display_currency, total_value, net_value)
 
     df_chart = df[df["數量"] > 0].copy()
@@ -869,7 +923,7 @@ else:
                         hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
                         marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
                     )])
-                    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
                     st.plotly_chart(fig, use_container_width=True)
 
@@ -1029,7 +1083,6 @@ else:
     st.divider()
     st.subheader("持倉明細" + (f"（{st.session_state.selected_category}）" if is_category_view else "（全部）"))
     with st.expander("點此展開 / 收合明細表", expanded=False):
-        if st.session_state.selected_category == "現金": render_cash_manager()
         detail_df = df[df["類型"] == st.session_state.selected_category] if is_category_view else df
         
         show_df = pd.DataFrame({
@@ -1319,7 +1372,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=buys['date_obj'], y=buys['price'], mode='markers', name='買進',
                                 marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')),
-                                customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
+                                customdata=buys['hover'], hovertemplate="%{customdata}<extra></extra>"
                             ))
                             
                         if not sells.empty:
@@ -1328,7 +1381,7 @@ else:
                             fig2.add_trace(go.Scatter(
                                 x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出',
                                 marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')),
-                                customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
+                                customdata=sells['hover'], hovertemplate="%{customdata}<extra></extra>"
                             ))
                             
                         fig2.update_layout(
