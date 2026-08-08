@@ -49,7 +49,16 @@ def decrypt_data(encrypted_str: str, password: str):
         return None
 
 def save_data(category, data):
-    """上傳加密後的資料到 Supabase"""
+    """上傳加密資料到 Supabase，同時在本地自動備份明文 JSON"""
+    # 1. 自動本地備份 (防丟失防線)
+    try:
+        local_filename = f"{category}_backup.json"
+        with open(local_filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass # 本地備份若因權限問題失敗，不中斷主流程
+        
+    # 2. 雲端加密儲存
     try:
         enc_payload = encrypt_data(data, st.session_state.password)
         res = supabase.table("encrypted_vault").select("id").eq("user_id", st.session_state.user.id).eq("category", category).execute()
@@ -63,7 +72,7 @@ def save_data(category, data):
                 "encrypted_payload": enc_payload
             }).execute()
     except Exception as e:
-        st.error(f"儲存 {category} 失敗: {e}")
+        st.error(f"儲存 {category} 至雲端失敗: {e}")
 
 def load_data(category, default_val):
     """從 Supabase 下載亂碼並在本地解密"""
@@ -103,7 +112,7 @@ if st.session_state.user is None:
                     st.session_state.user = res.user
                     st.session_state.password = login_pwd
                     st.rerun()
-                except Exception as e:
+                except Exception:
                     st.error("登入失敗，請確認帳號密碼是否正確。")
                     
         with tab_reg:
@@ -324,7 +333,6 @@ def render_cash_manager(unit, display_currency):
                 cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "顯示金額": disp_bal})
             
             cash_df = pd.DataFrame(cash_df_list)
-            # 依照顯示金額 (折算後) 由大到小排序
             cash_df = cash_df.sort_values(by="顯示金額", ascending=False)
             cash_total_display = cash_df["顯示金額"].sum()
         else:
@@ -356,7 +364,6 @@ def render_cash_manager(unit, display_currency):
                     else: st.warning("請輸入有效的餘額數字。")
                     
         if st.session_state.cash_accounts:
-            # 列表依照 TWD 價值由大到小排序
             sorted_cash_accounts = sorted(
                 st.session_state.cash_accounts,
                 key=lambda x: x["balance"] if x["currency"] == "TWD" else x["balance"] * usd_twd,
@@ -435,7 +442,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
             
             lib_df["顯示金額"] = lib_df["TWD金額"] if display_currency == "TWD" else lib_df["TWD金額"] / usd_twd if display_currency == "USD" else (lib_df["TWD金額"] / usd_twd) / btc_usd if btc_usd else lib_df["TWD金額"]
             
-            # 依照顯示金額 (折算後) 由大到小排序
             lib_df = lib_df.sort_values(by="顯示金額", ascending=False)
             lib_total_display = lib_df["顯示金額"].sum()
 
@@ -460,7 +466,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                     else: st.warning("請輸入有效的金額數字。")
                         
         if st.session_state.liabilities_accounts:
-            # 列表依照 TWD 價值由大到小排序
             sorted_liabilities = sorted(
                 st.session_state.liabilities_accounts,
                 key=lambda acc: acc["balance"] if acc["currency"] == "TWD" else acc["balance"] * usd_twd,
@@ -577,7 +582,7 @@ with st.sidebar:
         "元大美債20年": "00679B", "國泰20年美債": "00687B", "群益ESG投等債20+": "00937B",
         "中信高評級公司債": "00772B", "元大投資級公司債": "00720B",
         "元大台灣50正2": "00631L", "富邦台灣加權正2": "00675L", "國泰台灣加權正2": "00663L",
-        "台積電": "2330", "鴻海": "2317", "聯發科": "2454", "廣達": "2382", 
+        "台積電": "2330", "鸿海": "2317", "聯發科": "2454", "廣達": "2382", 
         "台達電": "2308", "中華電": "2412", "日月光投控": "3711", "聯電": "2303", 
         "華碩": "2357", "宏碁": "2353", "技嘉": "2376", "微星": "2377", 
         "緯創": "3231", "緯穎": "6669", "英業達": "2356", "和碩": "4938", 
@@ -846,12 +851,18 @@ else:
             col = cols[i % num_cols]
             cat, amount, pnl, cost = row["類型"], fmt_total(row["顯示現值"], display_currency), row["顯示損益"], row["顯示總成本"]
             cat_pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+            
+            if cost <= 0 and pnl > 0:
+                pct_display_str = "∞%"
+            else:
+                pct_display_str = f"{abs(cat_pnl_pct):.1f}%"
+                
             pnl_str, pnl_sign = fmt_total(abs(pnl), display_currency), "+" if pnl > 0 else "-" if pnl < 0 else ""
             pnl_color = "#ef4444" if pnl < 0 else "#4ade80" 
             safe_unit = unit.replace("$", "&#36;")
             
             amount_display, pnl_val_display = mask_val(f"{safe_unit} {amount}"), mask_val(f"{safe_unit} {pnl_str}")
-            pnl_display = f"<div style='font-size:16px; font-weight:600; color:{pnl_color}; margin-top:4px;'>({pnl_sign}{pnl_val_display} ｜ {pnl_sign}{abs(cat_pnl_pct):.1f}%)</div>" if cat != "現金" else "<div style='font-size:16px; margin-top:4px; visibility:hidden;'>-</div>"
+            pnl_display = f"<div style='font-size:16px; font-weight:600; color:{pnl_color}; margin-top:4px;'>({pnl_sign}{pnl_val_display} ｜ {pnl_sign}{pct_display_str})</div>" if cat != "現金" else "<div style='font-size:16px; margin-top:4px; visibility:hidden;'>-</div>"
 
             col.markdown(f"<div style='padding: 5px 0 15px 0;'><div style='font-size:18px; font-weight:600; color:#e2e8f0'>{cat}：{amount_display}</div>{pnl_display}</div>", unsafe_allow_html=True)
 
@@ -1002,6 +1013,10 @@ else:
 
         def get_pct_text_global(row):
             pnl, cost = row['PnL'], row['Cost']
+            if cost <= 0 and pnl > 0:
+                return "<span style='color:#4ade80'>+∞%</span>"
+            elif cost <= 0 and pnl <= 0:
+                return "0.00%"
             pct = (pnl / cost * 100) if cost > 0 else 0
             if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
             elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
@@ -1013,7 +1028,6 @@ else:
         filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
         filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
         
-        # 動態計算 offset，確保 Y 軸排列順序完美
         y_max = filtered_df[['Value', 'Cost']].max().max()
         y_min = filtered_df[['Value', 'Cost']].min().min()
         y_range = y_max - y_min
@@ -1262,6 +1276,10 @@ else:
 
                 def get_pct_text_ind(row):
                     pnl, cost = row['pnl'], row['cost']
+                    if cost <= 0 and pnl > 0:
+                        return "<span style='color:#4ade80'>+∞%</span>"
+                    elif cost <= 0 and pnl <= 0:
+                        return "0.00%"
                     pct = (pnl / cost * 100) if cost > 0 else 0
                     if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
                     elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
@@ -1368,10 +1386,10 @@ else:
                         st.warning("無法取得此標的之歷史報價，僅能繪製成本變化圖。")
                     else:
                         fig2 = go.Figure()
-                        hover_temp2 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>收盤價: %{y:,.2f}<extra></extra>"
+                        hover_temp2 = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
                         fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
                         
-                        hover_temp_avg = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>平均成本: %{y:,.2f}<extra></extra>"
+                        hover_temp_avg = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
                         fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
                         
                         buys = asset_tx[asset_tx['type'] == '買進'].copy()
@@ -1382,7 +1400,7 @@ else:
                         
                         def make_hover(row):
                             if privacy: return "＊＊＊＊"
-                            return f"日期: {row['date']}<br>動作: {row['type']}<br>價格: {row['price']}<br>數量: {row['quantity']}<br>備註: {row['note']}"
+                            return f"日期: {row['date']}<br>動作: {row['type']}<br>價格: {row['price']}<br>數量: {row['quantity']}<br>備註: {row.get('note', '')}"
                         
                         if not buys.empty:
                             buys['hover'] = buys.apply(make_hover, axis=1)
@@ -1439,7 +1457,7 @@ else:
         def render_tx_rows(df_to_render):
             for i, row in df_to_render.iterrows():
                 if st.session_state.editing_id == row["id"]:
-                    c1, c2, c3, c4, c5, c6 = st.columns([1.2, 0.8, 2.0, 1.8, 0.7, 1.3])
+                    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
                     with c1: new_date = st.date_input("日期", value=date.fromisoformat(row["date"]), key=f"ed_d_{row['id']}", label_visibility="collapsed")
                     with c2: 
                         type_options_list = ["買進", "賣出", "Sell Put", "Covered Call", "配息"]
@@ -1454,12 +1472,13 @@ else:
                         new_qty = cc1.text_input("數量", value=str(row["quantity"]), key=f"ed_q_{row['id']}", label_visibility="collapsed")
                         new_price = cc2.text_input("價格", value=str(row["price"]), key=f"ed_p_{row['id']}", label_visibility="collapsed")
                     with c5: new_curr = st.selectbox("幣別", ["TWD", "USD"], index=0 if row["currency"]=="TWD" else 1, key=f"ed_c_{row['id']}", label_visibility="collapsed")
-                    with c6:
+                    with c6: new_note = st.text_input("備註", value=row.get("note", ""), key=f"ed_nt_{row['id']}", label_visibility="collapsed")
+                    with c7:
                         b1, b2 = st.columns([0.9, 0.9])
                         if b1.button("儲存", key=f"save_tx_{row['id']}", type="primary", use_container_width=True):
                             for idx, t in enumerate(st.session_state.transactions):
                                 if t["id"] == row["id"]:
-                                    st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr})
+                                    st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr, "note": new_note})
                                     break
                             save_data("transactions", st.session_state.transactions)
                             st.session_state.editing_id = None
@@ -1469,14 +1488,15 @@ else:
                             st.session_state.editing_id = None
                             st.rerun()
                 else:
-                    c1, c2, c3, c4, c5, c6 = st.columns([1.0, 0.55, 1.6, 1.5, 0.55, 1.3])
+                    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
                     qty_display, price_display = ("＊＊＊＊", "＊＊＊＊") if privacy else (fmt(row['quantity']), fmt(row['price']))
                     with c1: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['date']}</div>", unsafe_allow_html=True)
                     with c2: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['type']}</div>", unsafe_allow_html=True)
                     with c3: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['name']}（{row['ticker']}）</div>", unsafe_allow_html=True)
                     with c4: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{qty_display} × {price_display}</div>", unsafe_allow_html=True)
                     with c5: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['currency']}</div>", unsafe_allow_html=True)
-                    with c6:
+                    with c6: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row.get('note', '')}</div>", unsafe_allow_html=True)
+                    with c7:
                         b1, b2 = st.columns([0.9, 0.9])
                         if b1.button("編輯", key=f"edit_{row['id']}"):
                             st.session_state.editing_id = row["id"]
@@ -1489,13 +1509,14 @@ else:
                             st.rerun()
 
         if not tx_df.empty:
-            h1, h2, h3, h4, h5, h6 = st.columns([1.0, 0.55, 1.6, 1.5, 0.55, 1.3])
+            h1, h2, h3, h4, h5, h6, h7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
             h1.markdown("<div style='text-align:center'><b>日期</b></div>", unsafe_allow_html=True)
             h2.markdown("<div style='text-align:center'><b>動作</b></div>", unsafe_allow_html=True)
             h3.markdown("<div style='text-align:center'><b>標的</b></div>", unsafe_allow_html=True)
             h4.markdown("<div style='text-align:center'><b>明細</b></div>", unsafe_allow_html=True)
             h5.markdown("<div style='text-align:center'><b>幣別</b></div>", unsafe_allow_html=True)
-            h6.markdown("")
+            h6.markdown("<div style='text-align:center'><b>備註</b></div>", unsafe_allow_html=True)
+            h7.markdown("")
             render_tx_rows(tx_df.head(20))
             if len(tx_df) > 20:
                 with st.expander(f"展開顯示其餘 {len(tx_df) - 20} 筆紀錄..."): render_tx_rows(tx_df.iloc[20:])
