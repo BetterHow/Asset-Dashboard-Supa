@@ -124,7 +124,14 @@ st.markdown(
     """
     <style>
     section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
-    div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; }
+    
+    /* 僅將側邊欄收折/展開按鈕設定為固定，避免誤傷右上角系統選單 */
+    div[data-testid="collapsedControl"], 
+    button[data-testid="stSidebarCollapseButton"] {
+        position: fixed !important; 
+        top: 10px !important; 
+        z-index: 999999;
+    }
     div[data-testid="stButton"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
     </style>
@@ -406,7 +413,7 @@ def render_cash_manager(unit, display_currency):
                             fig_cash_line.add_trace(go.Scatter(x=cash_hist_df['Date'], y=cash_hist_df['Value'], mode='lines', name='現金總額', line=dict(color='#00CC96', width=3, shape='linear'), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp))
                             today_dt = pd.to_datetime(date.today())
                             start_date = today_dt - pd.DateOffset(months=1) if len(cash_hist_df) <= 30 else cash_hist_df['Date'].min() - pd.Timedelta(days=3)
-                            fig_cash_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
+                            fig_cash_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
                             st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
@@ -415,7 +422,7 @@ def render_cash_manager(unit, display_currency):
                 with c_chart_right:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 現金分佈佔比</div>", unsafe_allow_html=True)
                     fig_cash = go.Figure(data=[go.Pie(labels=cash_df["名稱"], values=cash_df["顯示金額"], pull=[0.03]*len(cash_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#00CC96", "#AB63FA", "#FFA15A", "#636EFA", "#EF553B"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<extra></extra>" if st.session_state.privacy_mode else "%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>")])
-                    fig_cash.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig_cash.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=300, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_cash, use_container_width=True)
 
 def render_liability_manager(unit, display_currency, total_value, net_value):
@@ -426,7 +433,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
             lib_items = [{"id": lib["id"], "名稱": lib["name"], "幣別": lib["currency"], "原始金額": lib["balance"], "TWD金額": lib["balance"] if lib["currency"] == "TWD" else lib["balance"] * usd_twd} for lib in st.session_state.liabilities_accounts]
             lib_df = pd.DataFrame(lib_items)
             
-            # 💡 [修正] 補回計算「顯示金額」的邏輯
             lib_df["顯示金額"] = lib_df["TWD金額"] if display_currency == "TWD" else lib_df["TWD金額"] / usd_twd if display_currency == "USD" else (lib_df["TWD金額"] / usd_twd) / btc_usd if btc_usd else lib_df["TWD金額"]
             
             # 依照顯示金額 (折算後) 由大到小排序
@@ -510,13 +516,13 @@ def render_liability_manager(unit, display_currency, total_value, net_value):
                         fig_lib_line.add_trace(go.Scatter(x=lib_hist_df['Date'], y=lib_hist_df['Value'], mode='lines', name='負債總額', line=dict(color='#EF553B', width=3, shape='linear'), fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp))
                         today_dt = pd.to_datetime(date.today())
                         start_date = today_dt - pd.DateOffset(months=1) if len(lib_hist_df) <= 30 else lib_hist_df['Date'].min() - pd.Timedelta(days=3)
-                        fig_lib_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
+                        fig_lib_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
                         st.plotly_chart(fig_lib_line, use_container_width=True, config={'scrollZoom': True})
             with c_chart_right:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 負債分佈佔比</div>", unsafe_allow_html=True)
                 if not lib_df.empty:
                     fig_lib = go.Figure(data=[go.Pie(labels=lib_df["名稱"], values=lib_df["顯示金額"], pull=[0.03]*len(lib_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#EF553B", "#FFA15A", "#AB63FA", "#636EFA", "#00CC96"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<extra></extra>" if st.session_state.privacy_mode else "%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>")])
-                    fig_lib.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=280, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig_lib.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=300, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_lib, use_container_width=True)
         else: st.caption("目前無負債紀錄。")
 
@@ -1007,6 +1013,7 @@ else:
         filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
         filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
         
+        # 動態計算 offset，確保 Y 軸排列順序完美
         y_max = filtered_df[['Value', 'Cost']].max().max()
         y_min = filtered_df[['Value', 'Cost']].min().min()
         y_range = y_max - y_min
@@ -1292,12 +1299,12 @@ else:
                     
                     val_name_ind = '淨值'
                     if privacy:
-                        hover_val = "＊＊＊＊<extra>" + val_name_ind + "</extra>"
-                        hover_cost = "＊＊＊＊<extra>成本</extra>"
-                        hover_pnl = "＊＊＊＊<extra>損益</extra>"
-                        hover_pct = "＊＊＊＊<extra>$$ %</extra>"
+                        hover_val = " : ＊＊＊＊<extra>" + val_name_ind + "</extra>"
+                        hover_cost = " : ＊＊＊＊<extra>成本</extra>"
+                        hover_pnl = " : ＊＊＊＊<extra>損益</extra>"
+                        hover_pct = " : ＊＊＊＊<extra>$$ %</extra>"
                     else:
-                        hover_val = " : " + asset_unit_str + " %{y:,.0f}<extra>" + val_name_ind + "</extra>"
+                        hover_val = " : " + asset_unit_str + f" %{{y:,.0f}}<extra>{val_name_ind}</extra>"
                         hover_cost = " : " + asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
                         hover_pnl = " : %{customdata}<extra>損益</extra>"
                         hover_pct = " : %{customdata}<extra>$$ %</extra>"
@@ -1361,10 +1368,10 @@ else:
                         st.warning("無法取得此標的之歷史報價，僅能繪製成本變化圖。")
                     else:
                         fig2 = go.Figure()
-                        hover_temp2 = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
+                        hover_temp2 = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>收盤價: %{y:,.2f}<extra></extra>"
                         fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
                         
-                        hover_temp_avg = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
+                        hover_temp_avg = "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>" if privacy else "%{x|%Y-%m-%d}<br>平均成本: %{y:,.2f}<extra></extra>"
                         fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
                         
                         buys = asset_tx[asset_tx['type'] == '買進'].copy()
