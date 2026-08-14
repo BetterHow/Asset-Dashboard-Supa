@@ -227,7 +227,7 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
         except: continue
     return pd.DataFrame()
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_prices(tickers: tuple):
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
@@ -854,12 +854,12 @@ else:
         
         safe_u = unit.replace('$', '&#36;')
         if privacy:
-            t_html = "<div style='text-align:right; margin-top:-5px;'><span style='font-size:13px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:22px; font-weight:bold;'>＊＊＊＊</span></div>"
+            t_html = "<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:26px; font-weight:bold;'>＊＊＊＊</span></div>"
         else:
             t_color = "#4ade80" if t_chg_val > 0 else "#ef4444" if t_chg_val < 0 else "#94a3b8"
             t_sign = "+" if t_chg_val > 0 else ""
             tv_str = f"{t_sign}{safe_u} {abs(t_chg_val):,.0f}" if display_currency != "BTC" else f"{t_sign}BTC {abs(t_chg_val):,.4f}"
-            t_html = f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:13px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:22px; font-weight:bold; color:{t_color};'>{tv_str} ({t_sign}{t_chg_pct:.2f}%)</span></div>"
+            t_html = f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:26px; font-weight:bold; color:{t_color};'>{tv_str} ({t_sign}{t_chg_pct:.2f}%)</span></div>"
         
         st.markdown(t_html, unsafe_allow_html=True)
             
@@ -1067,19 +1067,26 @@ else:
                 start_val = filtered_df['Value'].iloc[0]
                 end_val = filtered_df['Value'].iloc[-1]
                 chg_val = end_val - start_val
-                chg_pct = (chg_val / start_val * 100) if start_val > 0 else 0
+                
+                if start_val <= 0 and chg_val > 0:
+                    chg_pct_str = "∞%"
+                elif start_val <= 0 and chg_val <= 0:
+                    chg_pct_str = "0.00%"
+                else:
+                    chg_pct = (chg_val / start_val * 100)
+                    chg_pct_str = f"{chg_pct:.2f}%"
                 
                 safe_u = unit.replace('$', '&#36;')
                 if privacy:
-                    p_html = "<div style='text-align:right; margin-top:-10px;'><span style='font-size:13px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:20px; font-weight:bold;'>＊＊＊＊</span></div>"
+                    p_html = "<div style='text-align:right; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:26px; font-weight:bold;'>＊＊＊＊</span></div>"
                 else:
                     c_color = "#4ade80" if chg_val > 0 else "#ef4444" if chg_val < 0 else "#94a3b8"
                     c_sign = "+" if chg_val > 0 else ""
                     v_str = f"{c_sign}{safe_u} {abs(chg_val):,.0f}" if display_currency != "BTC" else f"{c_sign}BTC {abs(chg_val):,.4f}"
-                    p_html = f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:13px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:20px; font-weight:bold; color:{c_color};'>{v_str} ({c_sign}{chg_pct:.2f}%)</span></div>"
+                    p_html = f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:26px; font-weight:bold; color:{c_color};'>{v_str} ({c_sign}{chg_pct_str})</span></div>"
                 st.markdown(p_html, unsafe_allow_html=True)
             else:
-                st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:13px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:20px; font-weight:bold; color:#94a3b8;'>無資料</span></div>", unsafe_allow_html=True)
+                st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:26px; font-weight:bold; color:#94a3b8;'>無資料</span></div>", unsafe_allow_html=True)
 
         filtered_df['PnL'] = filtered_df['Value'] - filtered_df['Cost']
         
@@ -1321,42 +1328,39 @@ else:
                     start_dt = asset_tx["date_obj"].min() - pd.Timedelta(days=7)
                     hist_df = get_historical_prices_for_chart(ticker_to_fetch, start_dt)
                 
+                # 🚀 終極效能優化：向量化與向前填充回測法
                 first_trade_date = asset_tx["date_obj"].min()
                 calendar = pd.date_range(start=first_trade_date, end=pd.to_datetime(date.today()))
-                daily_data = pd.DataFrame(index=calendar)
-                daily_data["shares"] = 0.0
-                daily_data["cost"] = 0.0
                 
                 current_shares = 0.0
                 current_cost = 0.0
-                tx_grouped = asset_tx.groupby("date_obj")
+                daily_records = []
                 
-                for d in calendar:
-                    if d in tx_grouped.groups:
-                        day_txs = tx_grouped.get_group(d)
-                        for _, tx in day_txs.iterrows():
-                            qty = float(tx["quantity"])
-                            price = float(tx["price"])
-                            action = tx["type"]
-                            
-                            if action == "買進":
-                                current_shares += qty
-                                current_cost += (qty * price)
-                            elif action == "賣出":
-                                if current_shares > 0:
-                                    avg_p = current_cost / current_shares
-                                    sell_q = min(qty, current_shares)
-                                    current_shares -= sell_q
-                                    current_cost -= (sell_q * avg_p)
-                                    if current_shares < 1e-5:
-                                        current_shares, current_cost = 0.0, 0.0
-                            elif action in ["Sell Put", "Covered Call", "配息"]:
-                                if include_premium_individual:
-                                    current_cost -= price
-                    
-                    daily_data.loc[d, "shares"] = current_shares
-                    daily_data.loc[d, "cost"] = current_cost
+                for d, day_txs in asset_tx.groupby("date_obj"):
+                    for _, tx in day_txs.iterrows():
+                        qty = float(tx["quantity"])
+                        price = float(tx["price"])
+                        action = tx["type"]
+                        
+                        if action == "買進":
+                            current_shares += qty
+                            current_cost += (qty * price)
+                        elif action == "賣出":
+                            if current_shares > 0:
+                                avg_p = current_cost / current_shares
+                                sell_q = min(qty, current_shares)
+                                current_shares -= sell_q
+                                current_cost -= (sell_q * avg_p)
+                                if current_shares < 1e-5:
+                                    current_shares, current_cost = 0.0, 0.0
+                        elif action in ["Sell Put", "Covered Call", "配息"]:
+                            if include_premium_individual:
+                                current_cost -= price
+                    daily_records.append({"date": d, "shares": current_shares, "cost": current_cost})
                 
+                records_df = pd.DataFrame(daily_records).set_index("date")
+                daily_data = pd.DataFrame(index=calendar)
+                daily_data = daily_data.join(records_df, how="left").ffill().fillna(0)
                 daily_data["avg_cost"] = daily_data.apply(lambda r: r["cost"] / r["shares"] if r["shares"] > 1e-5 else None, axis=1)
 
                 if not hist_df.empty:
