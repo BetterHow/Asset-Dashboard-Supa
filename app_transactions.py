@@ -13,6 +13,14 @@ from supabase import create_client, Client
 
 st.set_page_config(page_title="個人加密資產金庫", page_icon="🔐", layout="wide")
 
+# 效能優化：引入局部渲染技術，讓圖表切換瞬間完成
+if hasattr(st, "fragment"):
+    st_fragment = st.fragment
+elif hasattr(st, "experimental_fragment"):
+    st_fragment = st.experimental_fragment
+else:
+    def st_fragment(func): return func
+
 # ========================================================
 # 🚀 零知識加密與 Supabase 連線核心
 # ========================================================
@@ -29,18 +37,15 @@ except Exception as e:
     st.stop()
 
 def get_encryption_key(password: str) -> bytes:
-    """用使用者的密碼，轉換成 32-byte 的專屬加密金鑰"""
     digest = hashlib.sha256(password.encode('utf-8')).digest()
     return base64.urlsafe_b64encode(digest)
 
 def encrypt_data(data, password: str) -> str:
-    """將明文資料加密成亂碼"""
     f = Fernet(get_encryption_key(password))
     json_str = json.dumps(data, ensure_ascii=False)
     return f.encrypt(json_str.encode('utf-8')).decode('utf-8')
 
 def decrypt_data(encrypted_str: str, password: str):
-    """用使用者的密碼解密亂碼"""
     try:
         f = Fernet(get_encryption_key(password))
         decrypted_bytes = f.decrypt(encrypted_str.encode('utf-8'))
@@ -49,7 +54,6 @@ def decrypt_data(encrypted_str: str, password: str):
         return None
 
 def save_data(category, data):
-    """上傳加密資料到 Supabase (純雲端安全版)"""
     try:
         enc_payload = encrypt_data(data, st.session_state.password)
         res = supabase.table("encrypted_vault").select("id").eq("user_id", st.session_state.user.id).eq("category", category).execute()
@@ -66,7 +70,6 @@ def save_data(category, data):
         st.error(f"儲存 {category} 失敗: {e}")
 
 def load_data(category, default_val):
-    """從 Supabase 下載亂碼並在本地解密"""
     try:
         res = supabase.table("encrypted_vault").select("encrypted_payload").eq("user_id", st.session_state.user.id).eq("category", category).execute()
         if res.data:
@@ -124,13 +127,7 @@ st.markdown(
     """
     <style>
     section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; }
-    
-    div[data-testid="collapsedControl"], 
-    button[data-testid="stSidebarCollapseButton"] {
-        position: fixed !important; 
-        top: 10px !important; 
-        z-index: 999999;
-    }
+    div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; }
     div[data-testid="stButton"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
     </style>
@@ -140,14 +137,12 @@ st.markdown(
 st.title("📊 個人資產儀表板（端到端加密版）")
 st.caption("支援買進 / 賣出 / SP / CC / 配息｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
 
-# 初始化載入資料 (從 Supabase 解密)
 if "transactions" not in st.session_state: st.session_state.transactions = load_data("transactions", [])
 if "manual_prices" not in st.session_state: st.session_state.manual_prices = load_data("manual_prices", {})
 if "cash_accounts" not in st.session_state: st.session_state.cash_accounts = load_data("cash_accounts", [])
 if "liabilities_accounts" not in st.session_state: st.session_state.liabilities_accounts = load_data("liabilities_accounts", [])
 if "history_snapshots" not in st.session_state: st.session_state.history_snapshots = load_data("history_snapshots", {})
 
-# 狀態管理
 if "selected_category" not in st.session_state: st.session_state.selected_category = None
 if "editing_id" not in st.session_state: st.session_state.editing_id = None
 if "edit_cash_id" not in st.session_state: st.session_state.edit_cash_id = None
@@ -227,7 +222,7 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
         except: continue
     return pd.DataFrame()
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_all_prices(tickers: tuple):
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
@@ -314,9 +309,6 @@ def looks_like_ticker(text: str) -> bool:
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
-# ========================================================
-# ⚙️ 動態數量小數點格式化引擎
-# ========================================================
 def format_dynamic_qty(qty, price, currency):
     if pd.isna(qty) or qty is None: return "—"
     try: qty_val = float(qty)
@@ -762,6 +754,7 @@ else:
     df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
     df["未實現損益"] = df["現值"] - df["總成本"]
     display_currency = st.session_state.display_currency
+    privacy = st.session_state.privacy_mode
 
     def convert(val, cur):
         usd_val = val / usd_twd if cur == "TWD" else val
@@ -776,7 +769,6 @@ else:
 
     total_value = df["顯示現值"].sum()
     total_cost = df["顯示總成本"].sum()
-
     unit = "NT&#36;" if display_currency == "TWD" else "US&#36;" if display_currency == "USD" else "BTC"
 
     def get_twd_value(val, cur):
@@ -820,8 +812,9 @@ else:
         st.session_state.history_snapshots[today_str] = new_snapshot
         save_data("history_snapshots", st.session_state.history_snapshots)
         
-    privacy = st.session_state.privacy_mode
-        
+    # ========================================================
+    # 頂部控制列與當日淨值變化
+    # ========================================================
     col_title, col_toggle, col_refresh, col_empty, col_today_change = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
     with col_title: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
     with col_toggle:
@@ -850,16 +843,18 @@ else:
                 prev_net_val = (v - l) / div
         
         t_chg_val = net_value - prev_net_val
-        t_chg_pct = (t_chg_val / prev_net_val * 100) if prev_net_val > 0 else 0
+        if abs(prev_net_val) < 1e-5 and t_chg_val > 0: t_chg_pct_str = "∞%"
+        elif abs(prev_net_val) < 1e-5 and t_chg_val <= 0: t_chg_pct_str = "0.00%"
+        else: t_chg_pct_str = f"{(t_chg_val / prev_net_val * 100):.2f}%"
         
         safe_u = unit.replace('$', '&#36;')
         if privacy:
-            t_html = "<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:26px; font-weight:bold;'>＊＊＊＊</span></div>"
+            t_html = "<div style='text-align:right; margin-top:-5px;'><span style='font-size:16px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>"
         else:
             t_color = "#4ade80" if t_chg_val > 0 else "#ef4444" if t_chg_val < 0 else "#94a3b8"
             t_sign = "+" if t_chg_val > 0 else ""
             tv_str = f"{t_sign}{safe_u} {abs(t_chg_val):,.0f}" if display_currency != "BTC" else f"{t_sign}BTC {abs(t_chg_val):,.4f}"
-            t_html = f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:26px; font-weight:bold; color:{t_color};'>{tv_str} ({t_sign}{t_chg_pct:.2f}%)</span></div>"
+            t_html = f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:16px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{t_color};'>{tv_str} ({t_sign}{t_chg_pct_str})</span></div>"
         
         st.markdown(t_html, unsafe_allow_html=True)
             
@@ -900,13 +895,9 @@ else:
             col = cols[i % num_cols]
             cat, amount, pnl, cost = row["類型"], fmt_total(row["顯示現值"], display_currency), row["顯示損益"], row["顯示總成本"]
             
-            if cost <= 0 and pnl > 0:
-                pct_display_str = "∞%"
-            elif cost <= 0 and pnl <= 0:
-                pct_display_str = "0.0%"
-            else:
-                cat_pnl_pct = (pnl / cost * 100)
-                pct_display_str = f"{abs(cat_pnl_pct):.1f}%"
+            if cost <= 0 and pnl > 0: pct_display_str = "∞%"
+            elif cost <= 0 and pnl <= 0: pct_display_str = "0.0%"
+            else: pct_display_str = f"{abs(pnl / cost * 100):.1f}%"
                 
             pnl_str, pnl_sign = fmt_total(abs(pnl), display_currency), "+" if pnl > 0 else "-" if pnl < 0 else ""
             pnl_color = "#ef4444" if pnl < 0 else "#4ade80" 
@@ -1016,165 +1007,142 @@ else:
                     st.session_state.visible_items = set()
                     st.rerun()
 
-    st.divider()
-    st.subheader(f"📈 {'全部淨資產' if st.session_state.selected_category is None else st.session_state.selected_category} 變化趨勢")
-    
-    history_data = st.session_state.history_snapshots
-    if len(history_data) > 0:
-        processed_history = []
-        selected_cat = st.session_state.selected_category
-        for d_str, data_val in history_data.items():
-            if isinstance(data_val, dict) and data_val.get("version") == "v2":
-                d_data = data_val.get(display_currency, data_val.get("TWD"))
-                val = d_data.get("value", 0)
-                cost = d_data.get("cost", 0)
-                liability = d_data.get("liability", 0.0)
-                cats = d_data.get("categories", {})
-                v = val - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("value", 0)
-                c = cost - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("cost", 0)
-            else:
-                val = data_val.get("value", 0) if isinstance(data_val, dict) else data_val
-                cost = data_val.get("cost", 0) if isinstance(data_val, dict) else data_val
-                liability = data_val.get("liability", 0.0) if isinstance(data_val, dict) else 0.0
-                cats = data_val.get("categories", {}) if isinstance(data_val, dict) else {}
-                twd_v = val - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("value", 0)
-                twd_c = cost - liability if st.session_state.selected_category is None else cats.get(st.session_state.selected_category, {}).get("cost", 0)
-                div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
-                v, c = twd_v / div, twd_c / div
-            processed_history.append({'Date': d_str, 'Value': v, 'Cost': c})
+    # ========================================================
+    # ⚡ 效能優化：全部淨資產變化趨勢 (局部渲染 Fragment)
+    # ========================================================
+    @st_fragment
+    def render_overall_trend_section(history_snapshots, selected_cat, display_currency, usd_twd, btc_usd, unit, privacy):
+        st.divider()
+        st.subheader(f"📈 {'全部淨資產' if selected_cat is None else selected_cat} 變化趨勢")
+        
+        if len(history_snapshots) > 0:
+            processed_history = []
+            for d_str, data_val in history_snapshots.items():
+                if isinstance(data_val, dict) and data_val.get("version") == "v2":
+                    d_data = data_val.get(display_currency, data_val.get("TWD"))
+                    val = d_data.get("value", 0)
+                    cost = d_data.get("cost", 0)
+                    liability = d_data.get("liability", 0.0)
+                    cats = d_data.get("categories", {})
+                    v = val - liability if selected_cat is None else cats.get(selected_cat, {}).get("value", 0)
+                    c = cost - liability if selected_cat is None else cats.get(selected_cat, {}).get("cost", 0)
+                else:
+                    val = data_val.get("value", 0) if isinstance(data_val, dict) else data_val
+                    cost = data_val.get("cost", 0) if isinstance(data_val, dict) else data_val
+                    liability = data_val.get("liability", 0.0) if isinstance(data_val, dict) else 0.0
+                    cats = data_val.get("categories", {}) if isinstance(data_val, dict) else {}
+                    twd_v = val - liability if selected_cat is None else cats.get(selected_cat, {}).get("value", 0)
+                    twd_c = cost - liability if selected_cat is None else cats.get(selected_cat, {}).get("cost", 0)
+                    div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+                    v, c = twd_v / div, twd_c / div
+                processed_history.append({'Date': d_str, 'Value': v, 'Cost': c})
 
-        hist_df = pd.DataFrame(processed_history)
-        hist_df['Date'] = pd.to_datetime(hist_df['Date'])
-        hist_df = hist_df.sort_values('Date')
+            hist_df = pd.DataFrame(processed_history)
+            hist_df['Date'] = pd.to_datetime(hist_df['Date'])
+            hist_df = hist_df.sort_values('Date')
 
-        col_radio, col_period_change = st.columns([2.5, 1.5])
-        with col_radio:
-            time_range = st.radio("選擇時間區間", ["1週", "1個月", "3個月", "半年", "1年", "全部"], index=1, horizontal=True, label_visibility="collapsed", key="trend_time_range")
+            col_radio, col_period_change = st.columns([2.5, 1.5])
+            with col_radio:
+                time_range = st.radio("選擇時間區間", ["1週", "1個月", "3個月", "半年", "1年", "全部"], index=1, horizontal=True, label_visibility="collapsed", key="trend_time_range")
+                
+            today_dt = pd.to_datetime(date.today())
+            if time_range == "1週": start_date = today_dt - pd.DateOffset(weeks=1)
+            elif time_range == "1個月": start_date = today_dt - pd.DateOffset(months=1)
+            elif time_range == "3個月": start_date = today_dt - pd.DateOffset(months=3)
+            elif time_range == "半年": start_date = today_dt - pd.DateOffset(months=6)
+            elif time_range == "1年": start_date = today_dt - pd.DateOffset(years=1)
+            else: start_date = hist_df['Date'].min() - pd.Timedelta(days=3)
             
-        today_dt = pd.to_datetime(date.today())
-        if time_range == "1週": start_date = today_dt - pd.DateOffset(weeks=1)
-        elif time_range == "1個月": start_date = today_dt - pd.DateOffset(months=1)
-        elif time_range == "3個月": start_date = today_dt - pd.DateOffset(months=3)
-        elif time_range == "半年": start_date = today_dt - pd.DateOffset(months=6)
-        elif time_range == "1年": start_date = today_dt - pd.DateOffset(years=1)
-        else: start_date = hist_df['Date'].min() - pd.Timedelta(days=3)
-        
-        end_date = today_dt + pd.Timedelta(days=1)
-        filtered_df = hist_df[hist_df['Date'] >= start_date].copy()
-        
-        with col_period_change:
+            end_date = today_dt + pd.Timedelta(days=1)
+            filtered_df = hist_df[hist_df['Date'] >= start_date].copy()
+            
+            with col_period_change:
+                if not filtered_df.empty:
+                    start_val = filtered_df['Value'].iloc[0]
+                    end_val = filtered_df['Value'].iloc[-1]
+                    chg_val = end_val - start_val
+                    
+                    if abs(start_val) < 1e-5 and chg_val > 0: chg_pct_str = "∞%"
+                    elif abs(start_val) < 1e-5 and chg_val <= 0: chg_pct_str = "0.00%"
+                    else: chg_pct_str = f"{(chg_val / start_val * 100):.2f}%"
+                    
+                    safe_u = unit.replace('$', '&#36;')
+                    if privacy:
+                        p_html = "<div style='text-align:right; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>"
+                    else:
+                        c_color = "#4ade80" if chg_val > 0 else "#ef4444" if chg_val < 0 else "#94a3b8"
+                        c_sign = "+" if chg_val > 0 else ""
+                        v_str = f"{c_sign}{safe_u} {abs(chg_val):,.0f}" if display_currency != "BTC" else f"{c_sign}BTC {abs(chg_val):,.4f}"
+                        p_html = f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_color};'>{v_str} ({c_sign}{chg_pct_str})</span></div>"
+                    st.markdown(p_html, unsafe_allow_html=True)
+                else:
+                    st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:#94a3b8;'>無資料</span></div>", unsafe_allow_html=True)
+
+            filtered_df['PnL'] = filtered_df['Value'] - filtered_df['Cost']
+            unit_str = unit.replace("$", "&#36;")
+            
+            def get_val_text_global(x):
+                if x < 0: return f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>"
+                elif x > 0: return f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>"
+                else: return f"{unit_str} 0"
+
+            def get_pct_text_global(row):
+                pnl, cost = row['PnL'], row['Cost']
+                if cost <= 0 and pnl > 0: return "<span style='color:#4ade80'>+∞%</span>"
+                elif cost <= 0 and pnl <= 0: return "0.00%"
+                pct = (pnl / cost * 100) if cost > 0 else 0
+                if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
+                elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
+                else: return "0.00%"
+
+            filtered_df['pnl_val_text'] = filtered_df['PnL'].apply(get_val_text_global)
+            filtered_df['pnl_pct_text'] = filtered_df.apply(get_pct_text_global, axis=1)
+
+            filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
+            filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
+            
+            y_max = filtered_df[['Value', 'Cost']].max().max()
+            y_min = filtered_df[['Value', 'Cost']].min().min()
+            y_range = y_max - y_min
+            if y_range == 0: y_range = 1
+            offset1 = y_range * 0.005
+            offset2 = y_range * 0.010
+            
+            filtered_df['pnl_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - offset1
+            filtered_df['pct_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - offset2
+            
             if not filtered_df.empty:
-                start_val = filtered_df['Value'].iloc[0]
-                end_val = filtered_df['Value'].iloc[-1]
-                chg_val = end_val - start_val
+                fig_line = go.Figure()
+                val_name = '淨值' 
                 
-                if start_val <= 0 and chg_val > 0:
-                    chg_pct_str = "∞%"
-                elif start_val <= 0 and chg_val <= 0:
-                    chg_pct_str = "0.00%"
-                else:
-                    chg_pct = (chg_val / start_val * 100)
-                    chg_pct_str = f"{chg_pct:.2f}%"
-                
-                safe_u = unit.replace('$', '&#36;')
                 if privacy:
-                    p_html = "<div style='text-align:right; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:26px; font-weight:bold;'>＊＊＊＊</span></div>"
+                    hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
+                    hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
+                    hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
+                    hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
                 else:
-                    c_color = "#4ade80" if chg_val > 0 else "#ef4444" if chg_val < 0 else "#94a3b8"
-                    c_sign = "+" if chg_val > 0 else ""
-                    v_str = f"{c_sign}{safe_u} {abs(chg_val):,.0f}" if display_currency != "BTC" else f"{c_sign}BTC {abs(chg_val):,.4f}"
-                    p_html = f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:26px; font-weight:bold; color:{c_color};'>{v_str} ({c_sign}{chg_pct_str})</span></div>"
-                st.markdown(p_html, unsafe_allow_html=True)
-            else:
-                st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:26px; font-weight:bold; color:#94a3b8;'>無資料</span></div>", unsafe_allow_html=True)
+                    hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
+                    hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
+                    hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
+                    hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
 
-        filtered_df['PnL'] = filtered_df['Value'] - filtered_df['Cost']
-        
-        unit_str = unit.replace("$", "&#36;")
-        
-        def get_val_text_global(x):
-            if x < 0: return f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>"
-            elif x > 0: return f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>"
-            else: return f"{unit_str} 0"
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['pct_y'], mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False))
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['pnl_y'], mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False))
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3, shape='linear'), hovertemplate=hover_temp_cost))
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value'], mode='lines', name=val_name, line=dict(color='#00CC96', width=3, shape='linear'), hovertemplate=hover_temp_val))
 
-        def get_pct_text_global(row):
-            pnl, cost = row['PnL'], row['Cost']
-            if cost <= 0 and pnl > 0:
-                return "<span style='color:#4ade80'>+∞%</span>"
-            elif cost <= 0 and pnl <= 0:
-                return "0.00%"
-            pct = (pnl / cost * 100) if cost > 0 else 0
-            if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
-            elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
-            else: return "0.00%"
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+                fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
 
-        filtered_df['pnl_val_text'] = filtered_df['PnL'].apply(get_val_text_global)
-        filtered_df['pnl_pct_text'] = filtered_df.apply(get_pct_text_global, axis=1)
+                fig_line.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, end_date], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy, autorange=True), hovermode="x unified", dragmode="pan")
+                st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
+            else: st.info("所選時間區間內尚無歷史快照資料。")
+        else: st.info("尚無足夠的歷史快照資料以繪製圖表。")
 
-        filtered_df['Value_Gain'] = filtered_df[['Value', 'Cost']].max(axis=1)
-        filtered_df['Value_Loss'] = filtered_df[['Value', 'Cost']].min(axis=1)
-        
-        y_max = filtered_df[['Value', 'Cost']].max().max()
-        y_min = filtered_df[['Value', 'Cost']].min().min()
-        y_range = y_max - y_min
-        if y_range == 0: y_range = 1
-        offset1 = y_range * 0.005
-        offset2 = y_range * 0.010
-        
-        filtered_df['pnl_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - offset1
-        filtered_df['pct_y'] = filtered_df[['Value', 'Cost']].min(axis=1) - offset2
-
-        if not filtered_df.empty:
-            fig_line = go.Figure()
-            
-            val_name = '淨值' 
-            
-            if privacy:
-                hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
-                hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
-                hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
-                hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
-            else:
-                hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
-                hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
-                hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
-                hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
-
-            fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['pct_y'], mode='lines', name='百分比', 
-                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_pct_text'] if not privacy else None, 
-                hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False
-            ))
-
-            fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['pnl_y'], mode='lines', name='損益', 
-                line=dict(color='rgba(0,0,0,0)', width=0), customdata=filtered_df['pnl_val_text'] if not privacy else None, 
-                hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False
-            ))
-
-            fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', name='成本', 
-                line=dict(color='#3b82f6', width=3, shape='linear'), 
-                hovertemplate=hover_temp_cost
-            ))
-            
-            fig_line.add_trace(go.Scatter(
-                x=filtered_df['Date'], y=filtered_df['Value'], mode='lines', 
-                name=val_name, 
-                line=dict(color='#00CC96', width=3, shape='linear'), 
-                hovertemplate=hover_temp_val
-            ))
-
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
-
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-            fig_line.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
-
-            fig_line.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, end_date], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy, autorange=True), hovermode="x unified", dragmode="pan")
-            st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
-        else: st.info("所選時間區間內尚無歷史快照資料。")
-    else: st.info("尚無足夠的歷史快照資料以繪製圖表。")
+    # 執行局部渲染
+    render_overall_trend_section(st.session_state.history_snapshots, st.session_state.selected_category, display_currency, usd_twd, btc_usd, unit, privacy)
 
     st.divider()
     st.subheader("持倉明細" + (f"（{st.session_state.selected_category}）" if is_category_view else "（全部）"))
@@ -1296,119 +1264,114 @@ else:
                                 else: st.warning("請輸入有效數字")
 
     # ========================================================
-    # 🔍 個別標的進階分析
+    # ⚡ 效能優化：個別標的進階分析 (局部渲染 Fragment)
     # ========================================================
-    st.divider()
-    st.subheader("🔍 個別標的進階分析")
-    
-    if st.session_state.transactions:
-        tx_df_analysis = pd.DataFrame(st.session_state.transactions)
-        tx_df_analysis["date_obj"] = pd.to_datetime(tx_df_analysis["date"])
-        tx_df_analysis["target_label"] = tx_df_analysis.apply(lambda row: f"{row['name']} ({row['ticker']})" if row['ticker'] else row['name'], axis=1)
+    @st_fragment
+    def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
+        st.divider()
+        st.subheader("🔍 個別標的進階分析")
         
-        target_options_analysis = sorted(tx_df_analysis["target_label"].unique().tolist())
-        selected_analysis_target = st.selectbox(
-            "選擇要分析的標的", 
-            target_options_analysis, 
-            index=None,
-            placeholder="🔍 點擊此處並直接鍵盤輸入代號或名稱搜尋...",
-            label_visibility="collapsed"
-        )
-        
-        if selected_analysis_target:
-            include_premium_individual = st.checkbox("此標的圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False), key="include_premium_ind")
+        if transactions:
+            tx_df_analysis = pd.DataFrame(transactions)
+            tx_df_analysis["date_obj"] = pd.to_datetime(tx_df_analysis["date"])
+            tx_df_analysis["target_label"] = tx_df_analysis.apply(lambda row: f"{row['name']} ({row['ticker']})" if row['ticker'] else row['name'], axis=1)
+            
+            target_options_analysis = sorted(tx_df_analysis["target_label"].unique().tolist())
+            selected_analysis_target = st.selectbox("選擇要分析的標的", target_options_analysis, index=None, placeholder="🔍 點擊此處並直接鍵盤輸入代號或名稱搜尋...", label_visibility="collapsed")
+            
+            if selected_analysis_target:
+                include_premium_individual = st.checkbox("此標的圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False), key="include_premium_ind")
 
-            with st.spinner(f"正在載入 {selected_analysis_target} 的歷史資料並回推圖表..."):
-                asset_tx = tx_df_analysis[tx_df_analysis["target_label"] == selected_analysis_target].sort_values("date_obj").copy()
-                ticker_to_fetch = asset_tx.iloc[0]["ticker"]
-                asset_currency = asset_tx.iloc[0]["currency"]
-                
-                hist_df = pd.DataFrame()
-                if ticker_to_fetch:
-                    start_dt = asset_tx["date_obj"].min() - pd.Timedelta(days=7)
-                    hist_df = get_historical_prices_for_chart(ticker_to_fetch, start_dt)
-                
-                # 🚀 終極效能優化：向量化與向前填充回測法
-                first_trade_date = asset_tx["date_obj"].min()
-                calendar = pd.date_range(start=first_trade_date, end=pd.to_datetime(date.today()))
-                
-                current_shares = 0.0
-                current_cost = 0.0
-                daily_records = []
-                
-                for d, day_txs in asset_tx.groupby("date_obj"):
-                    for _, tx in day_txs.iterrows():
-                        qty = float(tx["quantity"])
-                        price = float(tx["price"])
-                        action = tx["type"]
-                        
-                        if action == "買進":
-                            current_shares += qty
-                            current_cost += (qty * price)
-                        elif action == "賣出":
-                            if current_shares > 0:
-                                avg_p = current_cost / current_shares
-                                sell_q = min(qty, current_shares)
-                                current_shares -= sell_q
-                                current_cost -= (sell_q * avg_p)
-                                if current_shares < 1e-5:
-                                    current_shares, current_cost = 0.0, 0.0
-                        elif action in ["Sell Put", "Covered Call", "配息"]:
-                            if include_premium_individual:
-                                current_cost -= price
-                    daily_records.append({"date": d, "shares": current_shares, "cost": current_cost})
-                
-                records_df = pd.DataFrame(daily_records).set_index("date")
-                daily_data = pd.DataFrame(index=calendar)
-                daily_data = daily_data.join(records_df, how="left").ffill().fillna(0)
-                daily_data["avg_cost"] = daily_data.apply(lambda r: r["cost"] / r["shares"] if r["shares"] > 1e-5 else None, axis=1)
+                with st.spinner(f"正在載入 {selected_analysis_target} 的歷史資料並回推圖表..."):
+                    asset_tx = tx_df_analysis[tx_df_analysis["target_label"] == selected_analysis_target].sort_values("date_obj").copy()
+                    ticker_to_fetch = asset_tx.iloc[0]["ticker"]
+                    asset_currency = asset_tx.iloc[0]["currency"]
+                    
+                    hist_df = pd.DataFrame()
+                    if ticker_to_fetch:
+                        start_dt = asset_tx["date_obj"].min() - pd.Timedelta(days=7)
+                        hist_df = get_historical_prices_for_chart(ticker_to_fetch, start_dt)
+                    
+                    # 🚀 終極效能優化：向量化與向前填充回測法
+                    first_trade_date = asset_tx["date_obj"].min()
+                    calendar = pd.date_range(start=first_trade_date, end=pd.to_datetime(date.today()))
+                    
+                    current_shares = 0.0
+                    current_cost = 0.0
+                    daily_records = []
+                    
+                    for d, day_txs in asset_tx.groupby("date_obj"):
+                        for _, tx in day_txs.iterrows():
+                            qty = float(tx["quantity"])
+                            price = float(tx["price"])
+                            action = tx["type"]
+                            
+                            if action == "買進":
+                                current_shares += qty
+                                current_cost += (qty * price)
+                            elif action == "賣出":
+                                if current_shares > 0:
+                                    avg_p = current_cost / current_shares
+                                    sell_q = min(qty, current_shares)
+                                    current_shares -= sell_q
+                                    current_cost -= (sell_q * avg_p)
+                                    if current_shares < 1e-5:
+                                        current_shares, current_cost = 0.0, 0.0
+                            elif action in ["Sell Put", "Covered Call", "配息"]:
+                                if include_premium_individual:
+                                    current_cost -= price
+                        daily_records.append({"date": d, "shares": current_shares, "cost": current_cost})
+                    
+                    records_df = pd.DataFrame(daily_records).set_index("date")
+                    daily_data = pd.DataFrame(index=calendar)
+                    daily_data = daily_data.join(records_df, how="left").ffill().fillna(0)
+                    daily_data["avg_cost"] = daily_data.apply(lambda r: r["cost"] / r["shares"] if r["shares"] > 1e-5 else None, axis=1)
 
-                if not hist_df.empty:
-                    daily_data = daily_data.join(hist_df["Close"])
-                    daily_data["Close"] = daily_data["Close"].ffill()
-                    daily_data["Value"] = daily_data["shares"] * daily_data["Close"]
-                else:
-                    daily_data["Close"] = None
-                    daily_data["Value"] = daily_data["cost"] 
-                
-                daily_data["pnl"] = daily_data["Value"] - daily_data["cost"]
-                
-                currency_symbols = {"TWD": "NT&#36;", "USD": "US&#36;", "BTC": "BTC"}
-                asset_unit_str = currency_symbols.get(asset_currency, asset_currency)
+                    if not hist_df.empty:
+                        daily_data = daily_data.join(hist_df["Close"])
+                        daily_data["Close"] = daily_data["Close"].ffill()
+                        daily_data["Value"] = daily_data["shares"] * daily_data["Close"]
+                    else:
+                        daily_data["Close"] = None
+                        daily_data["Value"] = daily_data["cost"] 
+                    
+                    daily_data["pnl"] = daily_data["Value"] - daily_data["cost"]
+                    
+                    currency_symbols = {"TWD": "NT&#36;", "USD": "US&#36;", "BTC": "BTC"}
+                    asset_unit_str = currency_symbols.get(asset_currency, asset_currency)
 
-                def get_val_text_ind(x):
-                    if x < 0: return f"<span style='color:#ef4444'>-{asset_unit_str} {abs(x):,.0f}</span>"
-                    elif x > 0: return f"<span style='color:#4ade80'>+{asset_unit_str} {x:,.0f}</span>"
-                    else: return f"{asset_unit_str} 0"
+                    def get_val_text_ind(x):
+                        if x < 0: return f"<span style='color:#ef4444'>-{asset_unit_str} {abs(x):,.0f}</span>"
+                        elif x > 0: return f"<span style='color:#4ade80'>+{asset_unit_str} {x:,.0f}</span>"
+                        else: return f"{asset_unit_str} 0"
 
-                def get_pct_text_ind(row):
-                    pnl, cost = row['pnl'], row['cost']
-                    if cost <= 0 and pnl > 0:
-                        return "<span style='color:#4ade80'>+∞%</span>"
-                    elif cost <= 0 and pnl <= 0:
-                        return "0.00%"
-                    pct = (pnl / cost * 100) if cost > 0 else 0
-                    if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
-                    elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
-                    else: return "0.00%"
+                    def get_pct_text_ind(row):
+                        pnl, cost = row['pnl'], row['cost']
+                        if cost <= 0 and pnl > 0: return "<span style='color:#4ade80'>+∞%</span>"
+                        elif cost <= 0 and pnl <= 0: return "0.00%"
+                        pct = (pnl / cost * 100) if cost > 0 else 0
+                        if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
+                        elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
+                        else: return "0.00%"
 
-                daily_data['pnl_val_text'] = daily_data['pnl'].apply(get_val_text_ind)
-                daily_data['pnl_pct_text'] = daily_data.apply(get_pct_text_ind, axis=1)
+                    daily_data['pnl_val_text'] = daily_data['pnl'].apply(get_val_text_ind)
+                    daily_data['pnl_pct_text'] = daily_data.apply(get_pct_text_ind, axis=1)
 
-                daily_data['Value_Gain'] = daily_data[['Value', 'cost']].max(axis=1)
-                daily_data['Value_Loss'] = daily_data[['Value', 'cost']].min(axis=1)
-                
-                y_max_ind = daily_data[['Value', 'cost']].max().max()
-                y_min_ind = daily_data[['Value', 'cost']].min().min()
-                y_range_ind = y_max_ind - y_min_ind
-                if y_range_ind == 0: y_range_ind = 1
-                offset1_ind = y_range_ind * 0.005
-                offset2_ind = y_range_ind * 0.010
+                    daily_data['Value_Gain'] = daily_data[['Value', 'cost']].max(axis=1)
+                    daily_data['Value_Loss'] = daily_data[['Value', 'cost']].min(axis=1)
+                    
+                    y_max_ind = daily_data[['Value', 'cost']].max().max()
+                    y_min_ind = daily_data[['Value', 'cost']].min().min()
+                    y_range_ind = y_max_ind - y_min_ind
+                    if y_range_ind == 0: y_range_ind = 1
+                    offset1_ind = y_range_ind * 0.005
+                    offset2_ind = y_range_ind * 0.010
 
-                daily_data['pnl_y'] = daily_data[['Value', 'cost']].min(axis=1) - offset1_ind
-                daily_data['pct_y'] = daily_data[['Value', 'cost']].min(axis=1) - offset2_ind
+                    daily_data['pnl_y'] = daily_data[['Value', 'cost']].min(axis=1) - offset1_ind
+                    daily_data['pct_y'] = daily_data[['Value', 'cost']].min(axis=1) - offset2_ind
 
-                if not hist_df.empty:
+                    st.markdown(f"*(註: 以下圖表皆以該標的原始計價幣別 **{asset_currency}** 呈現，不受匯率波動影響)*")
+                    
                     c_chart1, c_chart2 = st.columns(2)
                     
                     with c_chart1:
@@ -1427,90 +1390,54 @@ else:
                             hover_pnl = " : %{customdata}<extra>損益</extra>"
                             hover_pct = " : %{customdata}<extra>$$ %</extra>"
                         
-                        fig1.add_trace(go.Scatter(
-                            x=daily_data.index, y=daily_data['pct_y'], mode='lines', name='百分比', 
-                            line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, 
-                            hovertemplate=hover_pct, showlegend=False
-                        ))
-
-                        fig1.add_trace(go.Scatter(
-                            x=daily_data.index, y=daily_data['pnl_y'], mode='lines', name='損益', 
-                            line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, 
-                            hovertemplate=hover_pnl, showlegend=False
-                        ))
-
-                        fig1.add_trace(go.Scatter(
-                            x=daily_data.index, y=daily_data['cost'], mode='lines', name='成本', 
-                            line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost
-                        ))
-                        
-                        fig1.add_trace(go.Scatter(
-                            x=daily_data.index, y=daily_data['Value'], mode='lines', name=val_name_ind, 
-                            line=dict(color='#00CC96', width=2), hovertemplate=hover_val
-                        ))
-
+                        fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['pct_y'], mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_pct_text'] if not privacy else None, hovertemplate=hover_pct, showlegend=False))
+                        fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['pnl_y'], mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=daily_data['pnl_val_text'] if not privacy else None, hovertemplate=hover_pnl, showlegend=False))
+                        fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost))
+                        fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value'], mode='lines', name=val_name_ind, line=dict(color='#00CC96', width=2), hovertemplate=hover_val))
                         fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                         fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
-
                         fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                         fig1.add_trace(go.Scatter(x=daily_data.index, y=daily_data['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                         
-                        fig1.update_layout(
-                            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                            xaxis=dict(showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d"),
-                            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-                            hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                            dragmode="pan"
-                        )
+                        fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy), hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), dragmode="pan")
                         st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                     
                     with c_chart2:
                         st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>🎯 價格走勢與交易點位</div>", unsafe_allow_html=True)
-                        fig2 = go.Figure()
-                        hover_temp2 = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
-                        fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
-                        
-                        hover_temp_avg = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
-                        fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
-                        
-                        buys = asset_tx[asset_tx['type'] == '買進'].copy()
-                        sells = asset_tx[asset_tx['type'] == '賣出'].copy()
-                        
-                        max_q = asset_tx[asset_tx['type'].isin(['買進', '賣出'])]['quantity'].max()
-                        if pd.isna(max_q) or max_q <= 0: max_q = 1
-                        
-                        def make_hover(row):
-                            if privacy: return "＊＊＊＊"
-                            return f"日期: {row['date']}<br>動作: {row['type']}<br>價格: {row['price']}<br>數量: {row['quantity']}<br>備註: {row.get('note', '')}"
-                        
-                        if not buys.empty:
-                            buys['hover'] = buys.apply(make_hover, axis=1)
-                            sizes = [max(8, min(25, (q / max_q) * 25)) for q in buys['quantity']]
-                            fig2.add_trace(go.Scatter(
-                                x=buys['date_obj'], y=buys['price'], mode='markers', name='買進',
-                                marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')),
-                                customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
-                            ))
+                        if hist_df.empty:
+                            st.warning("無法取得此標的之歷史報價，僅能繪製成本變化圖。")
+                        else:
+                            fig2 = go.Figure()
+                            hover_temp2 = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
+                            fig2.add_trace(go.Scatter(x=hist_df.index, y=hist_df['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2), hovertemplate=hover_temp2))
                             
-                        if not sells.empty:
-                            sells['hover'] = sells.apply(make_hover, axis=1)
-                            sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
-                            fig2.add_trace(go.Scatter(
-                                x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出',
-                                marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')),
-                                customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"
-                            ))
+                            hover_temp_avg = " : %{y:,.2f}<extra></extra>" if not privacy else " : ＊＊＊＊<extra></extra>"
+                            fig2.add_trace(go.Scatter(x=daily_data.index, y=daily_data['avg_cost'], mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash'), hovertemplate=hover_temp_avg, connectgaps=False))
                             
-                        fig2.update_layout(
-                            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                            xaxis=dict(showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d"),
-                            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-                            hovermode="closest", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                            dragmode="pan"
-                        )
-                        st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
-                else:
-                    st.warning("無法取得此標的之歷史報價，無法繪製圖表。")
+                            buys = asset_tx[asset_tx['type'] == '買進'].copy()
+                            sells = asset_tx[asset_tx['type'] == '賣出'].copy()
+                            max_q = asset_tx[asset_tx['type'].isin(['買進', '賣出'])]['quantity'].max()
+                            if pd.isna(max_q) or max_q <= 0: max_q = 1
+                            
+                            def make_hover(row):
+                                if privacy: return "＊＊＊＊"
+                                return f"日期: {row['date']}<br>動作: {row['type']}<br>價格: {row['price']}<br>數量: {row['quantity']}<br>備註: {row.get('note', '')}"
+                            
+                            if not buys.empty:
+                                buys['hover'] = buys.apply(make_hover, axis=1)
+                                sizes = [max(8, min(25, (q / max_q) * 25)) for q in buys['quantity']]
+                                fig2.add_trace(go.Scatter(x=buys['date_obj'], y=buys['price'], mode='markers', name='買進', marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')), customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
+                                
+                            if not sells.empty:
+                                sells['hover'] = sells.apply(make_hover, axis=1)
+                                sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
+                                fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
+                                
+                            fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy), hovermode="closest", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0), dragmode="pan")
+                            st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
+
+    # 執行個別標的局部渲染
+    render_individual_analysis(st.session_state.transactions, st.session_state.privacy_mode, display_currency, usd_twd, btc_usd)
 
     st.divider()
     st.subheader("交易紀錄管理")
@@ -1572,7 +1499,7 @@ else:
                             st.rerun()
                 else:
                     c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
-                    if privacy:
+                    if st.session_state.privacy_mode:
                         qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
                     else:
                         qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
