@@ -290,7 +290,6 @@ nv, nc = tv - tl_disp, tc - tl_disp
 n_pnl = nv - nc
 n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
 
-# 每日快照更新
 new_snap = {"version": "v2"}
 for d_cur in ["TWD", "USD", "BTC"]:
     cv = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
@@ -393,7 +392,6 @@ with st.sidebar:
             fetch_all_prices.clear(); st.rerun()
         else: st.warning("請正確填寫數量與價格。")
 
-# 頂部控制列與當日淨值變化
 c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
 with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
 with c_tg:
@@ -473,7 +471,7 @@ if not df.empty:
         if not st.session_state.visible_items or not st.session_state.visible_items.intersection(set(all_l)): st.session_state.visible_items = set(all_l)
 
 # ========================================================
-# ⚡ 局部渲染 Fragment: 趨勢圖 (補回面積填色)
+# ⚡ 局部渲染 Fragment: 趨勢圖 (補回互動設定與面積填色)
 # ========================================================
 @st_fragment
 def render_overall_trend_section(history_snapshots, selected_cat, display_currency, usd_twd, btc_usd, unit, privacy):
@@ -514,22 +512,21 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                         st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
             
             if not fdf.empty:
-                # 計算填色用的高低點
                 fdf['Value_Gain'] = fdf[['Value', 'Cost']].max(axis=1)
                 fdf['Value_Loss'] = fdf[['Value', 'Cost']].min(axis=1)
                 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3)))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=3)))
-                
-                # 補回面積填色
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                 
-                fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
-                st.plotly_chart(fig, use_container_width=True)
+                # 補回：hovermode 與 dragmode 設定
+                fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+                # 補回：scrollZoom
+                st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
 render_overall_trend_section(st.session_state.history_snapshots, st.session_state.selected_category, display_currency, usd_twd, btc_usd, unit.replace('$', '&#36;'), privacy)
 
@@ -624,7 +621,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             else: st.dataframe(d_prem, use_container_width=True, hide_index=True, column_config=col_cfg)
 
 # ========================================================
-# ⚡ 局部渲染 Fragment: 個別標的分析 (補回所有視覺化)
+# ⚡ 局部渲染 Fragment: 個別標的分析 (補回所有互動與視覺化)
 # ========================================================
 @st_fragment
 def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
@@ -687,7 +684,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     ddf["Close"], ddf["Value"] = None, ddf["cost"]
                 
-                # 計算填色用的高低點
                 ddf['Value_Gain'] = ddf[['Value', 'cost']].max(axis=1)
                 ddf['Value_Loss'] = ddf[['Value', 'cost']].min(axis=1)
                 
@@ -698,26 +694,23 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     fig1 = go.Figure()
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2)))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=2)))
-                    
-                    # 補回：面積填色
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
-                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
-                    st.plotly_chart(fig1, use_container_width=True)
+                    # 補回：hovermode 與 dragmode 設定
+                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+                    # 補回：scrollZoom
+                    st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
                 with c2:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>🎯 價格走勢</div>", unsafe_allow_html=True)
                     if not hdf.empty:
                         fig2 = go.Figure()
                         fig2.add_trace(go.Scatter(x=hdf.index, y=hdf['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2)))
-                        
-                        # 補回：平均成本線
                         fig2.add_trace(go.Scatter(x=ddf.index, y=ddf['avg_cost'].abs(), mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash')))
                         
-                        # 補回：動態大小買賣點
                         buys = atx[atx['type'] == '買進'].copy()
                         sells = atx[atx['type'] == '賣出'].copy()
                         max_q = atx[atx['type'].isin(['買進', '賣出'])]['quantity'].max()
@@ -735,8 +728,10 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
-                        st.plotly_chart(fig2, use_container_width=True)
+                        # 補回：hovermode="closest" 與 dragmode 設定
+                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
+                        # 補回：scrollZoom
+                        st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
 
