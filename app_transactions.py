@@ -99,11 +99,9 @@ if st.session_state.user is None:
     st.stop()
 
 # ========================================================
-# 📊 正式 App 儀表板
+# 📊 正式 App 初始化與輔助函數
 # ========================================================
 st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
-st.title("📊 個人資產儀表板（端到端加密版）")
-st.caption("支援買進 / 賣出 / SP / CC / 配息｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
 
 for k, default in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, default)
@@ -223,6 +221,90 @@ def safe_float(v):
 
 def mask_val(v): return "＊＊＊＊" if st.session_state.privacy_mode else v
 
+def format_dynamic_qty(qty, price, currency):
+    if pd.isna(qty) or qty is None: return "—"
+    try: qty_val = float(qty)
+    except: return str(qty)
+    try: price_val = float(price)
+    except: price_val = 0.0
+    
+    if currency == "TWD": price_usd = price_val / usd_twd
+    elif currency == "BTC": price_usd = price_val * (btc_usd if btc_usd else 95000.0)
+    else: price_usd = price_val
+    
+    if price_usd >= 10000: decimals = 4
+    elif price_usd >= 5000: decimals = 3
+    elif price_usd >= 1500: decimals = 2
+    elif price_usd >= 500: decimals = 1
+    else:
+        if qty_val % 1 != 0: decimals = 2
+        else: decimals = 0
+    return f"{qty_val:,.{decimals}f}"
+
+# ========================================================
+# 🚀 核心資料與數值預先計算區 (消除 NameError 的關鍵)
+# ========================================================
+display_currency = st.session_state.display_currency
+privacy = st.session_state.privacy_mode
+unit = "NT&#36;" if display_currency == "TWD" else "US&#36;" if display_currency == "USD" else "BTC"
+
+def convert(val, cur):
+    u = val / usd_twd if cur == "TWD" else val
+    return u * usd_twd if display_currency == "TWD" else u if display_currency == "USD" else u / btc_usd if btc_usd else u
+
+def get_val_in_cur(val, from_cur, to_cur):
+    u = val / usd_twd if from_cur == "TWD" else val * btc_usd if from_cur == "BTC" and btc_usd else val
+    return u * usd_twd if to_cur == "TWD" else u / btc_usd if to_cur == "BTC" and btc_usd else u
+
+holdings = calculate_holdings(st.session_state.transactions)
+for acc in st.session_state.cash_accounts:
+    holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True})
+
+for h in holdings:
+    if h.get("is_cash"): h["總成本"], h["調整後成本"] = h["原始總成本"], 1.0
+    else:
+        eff = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] if st.session_state.get("include_premium", False) else h["原始總成本"]
+        h["總成本"], h["調整後成本"] = eff, (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"])/h["數量"] if abs(h["數量"])>0 else 0
+
+df = pd.DataFrame(holdings) if holdings else pd.DataFrame(columns=["名稱", "代號", "幣別", "類型", "數量", "原始總成本", "平均成本", "CC權利金", "SP權利金", "股息", "已實現損益", "歷史買進數量", "歷史賣出數量", "is_cash", "總成本", "調整後成本"])
+if not df.empty:
+    df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
+    cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and not r.get("is_cash"))))
+    df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"])), axis=1)
+    df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
+    df["未實現損益"] = df["現值"] - df["總成本"]
+    df["顯示現值"] = df.apply(lambda r: convert(r["現值"], r["幣別"]), axis=1)
+    df["顯示總成本"] = df.apply(lambda r: convert(r["總成本"], r["幣別"]), axis=1)
+    df["顯示損益"] = df["顯示現值"] - df["顯示總成本"]
+
+tv = df["顯示現值"].sum() if not df.empty else 0.0
+tc = df["顯示總成本"].sum() if not df.empty else 0.0
+tl_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
+tl_disp = convert(tl_twd, "TWD")
+nv, nc = tv - tl_disp, tc - tl_disp
+n_pnl = nv - nc
+n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
+
+# 每日快照更新
+new_snap = {"version": "v2"}
+for d_cur in ["TWD", "USD", "BTC"]:
+    cv = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
+    cc = sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
+    cl = sum(get_val_in_cur(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
+    cs = {}
+    if not df.empty:
+        for cat, gp in df.groupby("類型"):
+            cs[cat] = {"value": round(sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2), "cost": round(sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2)}
+    new_snap[d_cur] = {"value": round(cv, 2), "cost": round(cc, 2), "liability": round(cl, 2), "categories": cs}
+
+today_s = date.today().isoformat()
+if today_s not in st.session_state.history_snapshots or st.session_state.history_snapshots[today_s] != new_snap:
+    st.session_state.history_snapshots[today_s] = new_snap
+    save_data("history_snapshots", st.session_state.history_snapshots)
+
+# ========================================================
+# 📊 UI 渲染區段開始
+# ========================================================
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -239,6 +321,7 @@ if st.session_state.selected_extras:
 
 st.divider()
 
+# 側邊欄
 with st.sidebar:
     st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
     if st.button("登出金庫", use_container_width=True):
@@ -246,6 +329,10 @@ with st.sidebar:
         st.session_state.user, st.session_state.password = None, None
         st.cache_data.clear(); st.rerun()
     st.divider()
+    
+    st.title("📊 個人資產儀表板")
+    st.caption("支援買進 / 賣出 / SP / CC / 配息｜動態現金管理｜負債追蹤｜單一標的分析｜隱私保護")
+
     st.header("新增交易")
     if st.session_state.clear_form:
         for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: st.session_state[k] = ""
@@ -268,14 +355,14 @@ with st.sidebar:
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
     name = st.text_input("資產名稱", key="name_input")
     ticker = st.text_input("代號", key="ticker_input")
-    tv = str(ticker).strip().upper()
+    tv_str = str(ticker).strip().upper()
     
-    if tv != st.session_state.prev_ticker:
-        clt = tv.replace(".TW", "").replace(".TWO", "")
-        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv else "美股" if tv.isalpha() else "其他"
+    if tv_str != st.session_state.prev_ticker:
+        clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_ticker = tv
-        st.session_state["price_input"] = str(get_latest_price(tv) or "") if len(tv)>=2 else ""
+        st.session_state.prev_ticker = tv_str
+        st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
 
     asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
     if asset_type != st.session_state.prev_type:
@@ -303,119 +390,63 @@ with st.sidebar:
             fetch_all_prices.clear(); st.rerun()
         else: st.warning("請正確填寫數量與價格。")
 
-holdings = calculate_holdings(st.session_state.transactions)
-for acc in st.session_state.cash_accounts:
-    holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True})
-
-if not holdings: st.info("目前沒有持倉或現金。請從左側新增第一筆交易。")
-else:
-    for h in holdings:
-        if h.get("is_cash"): h["總成本"], h["調整後成本"] = h["原始總成本"], 1.0
+# 頂部控制列與當日淨值變化
+c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
+with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
+with c_tg:
+    if st.button("顯示金額" if privacy else "隱藏金額", use_container_width=True):
+        st.session_state.privacy_mode = not privacy; st.rerun()
+with c_r:
+    if st.button("重新整理", use_container_width=True): st.cache_data.clear(); st.rerun()
+        
+with c_tdc:
+    hds = sorted([d for d in st.session_state.history_snapshots.keys() if d < today_s])
+    pnv = nv
+    if hds:
+        pd_data = st.session_state.history_snapshots[hds[-1]]
+        if isinstance(pd_data, dict) and pd_data.get("version") == "v2":
+            pnv = pd_data.get(display_currency, pd_data.get("TWD")).get("value", 0) - pd_data.get(display_currency, pd_data.get("TWD")).get("liability", 0)
         else:
-            eff = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] if st.session_state.get("include_premium", False) else h["原始總成本"]
-            h["總成本"], h["調整後成本"] = eff, (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"])/h["數量"] if abs(h["數量"])>0 else 0
-
-    df = pd.DataFrame(holdings)
-    df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
-    cp = fetch_all_prices(tuple(set(r["代號"] for r in holdings if r.get("代號") and not r.get("is_cash"))))
+            v, l = pd_data.get("value", 0) if isinstance(pd_data, dict) else pd_data, pd_data.get("liability", 0) if isinstance(pd_data, dict) else 0
+            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+            pnv = (v - l) / div
     
-    df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"])), axis=1)
-    df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
-    df["未實現損益"] = df["現值"] - df["總成本"]
-    
-    dc = st.session_state.display_currency
-    def cvt(v, cur):
-        u = v / usd_twd if cur == "TWD" else v
-        return u * usd_twd if dc == "TWD" else u if dc == "USD" else u / btc_usd if btc_usd else u
+    tc_val = nv - pnv
+    tc_pct_str = "∞%" if abs(pnv)<1e-5 and tc_val>0 else "0.00%" if abs(pnv)<1e-5 and tc_val<=0 else f"{(tc_val/abs(pnv)*100):.2f}%"
+    su = unit.replace('$', '&#36;')
+    if privacy: st.markdown("<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
+    else:
+        color = "#4ade80" if tc_val>0 else "#ef4444" if tc_val<0 else "#94a3b8"
+        sign = "+" if tc_val>0 else ""
+        vs = f"{sign}{su} {abs(tc_val):,.0f}" if display_currency != "BTC" else f"{sign}BTC {abs(tc_val):,.4f}"
+        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{color};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
 
-    df["顯示現值"] = df.apply(lambda r: cvt(r["現值"], r["幣別"]), axis=1)
-    df["顯示總成本"] = df.apply(lambda r: cvt(r["總成本"], r["幣別"]), axis=1)
-    df["顯示損益"] = df["顯示現值"] - df["顯示總成本"]
+opts = ["TWD", "USD", "BTC"]
+idx = opts.index(display_currency) if display_currency in opts else 0
+nc = st.radio("顯示幣別", opts, horizontal=True, index=idx)
+if nc != display_currency: st.session_state.display_currency = nc; st.rerun()
+st.checkbox("損益含權利金/配息", key="include_premium")
 
-    tv, tc = df["顯示現值"].sum(), df["顯示總成本"].sum()
-    unit = "NT&#36;" if dc == "TWD" else "US&#36;" if dc == "USD" else "BTC"
-        
-    tl_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
-    tl_disp = cvt(tl_twd, "TWD")
-    nv, nc = tv - tl_disp, tc - tl_disp
-    n_pnl = nv - nc
-    n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("淨資產現值", mask_val(f"{unit.replace('&#36;', '$')} {nv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {nv:,.3f}"))
+m2.metric("總資產現值", mask_val(f"{unit.replace('&#36;', '$')} {tv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tv:,.3f}"))
+m3.metric("負債總額", mask_val(f"{unit.replace('&#36;', '$')} {tl_disp:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tl_disp:,.3f}"))
+m4.metric("未實現損益", mask_val(f"{unit.replace('&#36;', '$')} {n_pnl:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {n_pnl:,.3f}"), delta=f"{n_pnl_pct:.1f}%")
 
-    def gvc(v, f, to):
-        u = v / usd_twd if f == "TWD" else v * btc_usd if f == "BTC" and btc_usd else v
-        return u * usd_twd if to == "TWD" else u / btc_usd if to == "BTC" and btc_usd else u
+with st.expander("💵 現金總覽", expanded=False):
+    c_tot = 0
+    if st.session_state.cash_accounts:
+        cd = pd.DataFrame(st.session_state.cash_accounts)
+        cd["顯示金額"] = cd.apply(lambda r: convert(r["balance"], r["currency"]), axis=1)
+        c_tot = cd["顯示金額"].sum()
+    st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(f'{unit} {c_tot:,.0f}')}</div>", unsafe_allow_html=True)
 
-    new_snap = {"version": "v2"}
-    for d_cur in ["TWD", "USD", "BTC"]:
-        cv = sum(gvc(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows())
-        cc = sum(gvc(r["總成本"], r["幣別"], d_cur) for _, r in df.iterrows())
-        cl = sum(gvc(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
-        cs = {}
-        for cat, gp in df.groupby("類型"):
-            cs[cat] = {"value": round(sum(gvc(r["現值"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2), "cost": round(sum(gvc(r["總成本"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2)}
-        new_snap[d_cur] = {"value": round(cv, 2), "cost": round(cc, 2), "liability": round(cl, 2), "categories": cs}
+with st.expander("💳 負債總覽", expanded=False):
+    st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(f'{unit} {tl_disp:,.0f}')} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(f'{tv/nv:.2f} 倍' if nv>0 else 'N/A')}</span></div>", unsafe_allow_html=True)
 
-    today_s = date.today().isoformat()
-    if today_s not in st.session_state.history_snapshots or st.session_state.history_snapshots[today_s] != new_snap:
-        st.session_state.history_snapshots[today_s] = new_snap
-        save_data("history_snapshots", st.session_state.history_snapshots)
-        
-    c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
-    with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
-    with c_tg:
-        if st.button("顯示金額" if st.session_state.privacy_mode else "隱藏金額", use_container_width=True):
-            st.session_state.privacy_mode = not st.session_state.privacy_mode; st.rerun()
-    privacy = st.session_state.privacy_mode
-    with c_r:
-        if st.button("重新整理", use_container_width=True): st.cache_data.clear(); st.rerun()
-            
-    with c_tdc:
-        hds = sorted([d for d in st.session_state.history_snapshots.keys() if d < today_s])
-        pnv = nv
-        if hds:
-            pd_data = st.session_state.history_snapshots[hds[-1]]
-            if isinstance(pd_data, dict) and pd_data.get("version") == "v2":
-                pnv = pd_data.get(dc, pd_data.get("TWD")).get("value", 0) - pd_data.get(dc, pd_data.get("TWD")).get("liability", 0)
-            else:
-                v, l = pd_data.get("value", 0) if isinstance(pd_data, dict) else pd_data, pd_data.get("liability", 0) if isinstance(pd_data, dict) else 0
-                div = 1 if dc == "TWD" else usd_twd if dc == "USD" else (btc_usd * usd_twd if btc_usd else 1)
-                pnv = (v - l) / div
-        
-        tc_val = nv - pnv
-        tc_pct_str = "∞%" if abs(pnv)<1e-5 and tc_val>0 else "0.00%" if abs(pnv)<1e-5 and tc_val<=0 else f"{(tc_val/abs(pnv)*100):.2f}%"
-        su = unit.replace('$', '&#36;')
-        if privacy: st.markdown("<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
-        else:
-            color = "#4ade80" if tc_val>0 else "#ef4444" if tc_val<0 else "#94a3b8"
-            sign = "+" if tc_val>0 else ""
-            vs = f"{sign}{su} {abs(tc_val):,.0f}" if dc != "BTC" else f"{sign}BTC {abs(tc_val):,.4f}"
-            st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{color};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
-            
-    opts = ["TWD", "USD", "BTC"]
-    idx = opts.index(st.session_state.display_currency) if st.session_state.display_currency in opts else 0
-    nc = st.radio("顯示幣別", opts, horizontal=True, index=idx)
-    if nc != st.session_state.display_currency: st.session_state.display_currency = nc; st.rerun()
-    st.checkbox("損益含權利金/配息", key="include_premium")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("淨資產現值", mask_val(f"{unit.replace('&#36;', '$')} {nv:,.0f}" if dc!="BTC" else f"{unit.replace('&#36;', '$')} {nv:,.3f}"))
-    m2.metric("總資產現值", mask_val(f"{unit.replace('&#36;', '$')} {tv:,.0f}" if dc!="BTC" else f"{unit.replace('&#36;', '$')} {tv:,.3f}"))
-    m3.metric("負債總額", mask_val(f"{unit.replace('&#36;', '$')} {tl_disp:,.0f}" if dc!="BTC" else f"{unit.replace('&#36;', '$')} {tl_disp:,.3f}"))
-    m4.metric("未實現損益", mask_val(f"{unit.replace('&#36;', '$')} {n_pnl:,.0f}" if dc!="BTC" else f"{unit.replace('&#36;', '$')} {n_pnl:,.3f}"), delta=f"{n_pnl_pct:.1f}%")
-
-    with st.expander("💵 現金總覽", expanded=False):
-        c_tot = 0
-        if st.session_state.cash_accounts:
-            cd = pd.DataFrame(st.session_state.cash_accounts)
-            cd["顯示金額"] = cd.apply(lambda r: cvt(r["balance"], r["currency"]), axis=1)
-            c_tot = cd["顯示金額"].sum()
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(f'{unit} {c_tot:,.0f}')}</div>", unsafe_allow_html=True)
-
-    with st.expander("💳 負債總覽", expanded=False):
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(f'{unit} {tl_disp:,.0f}')} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(f'{tv/nv:.2f} 倍' if nv>0 else 'N/A')}</span></div>", unsafe_allow_html=True)
-
+if not df.empty:
     st.subheader("目前持倉配置")
-    df_chart = df[df["數量"] > 0].copy()
+    df_chart = df[df["數量"] != 0].copy()
     cats = df_chart.groupby("類型")[["顯示現值", "顯示損益", "顯示總成本"]].sum().reset_index().sort_values("顯示現值", ascending=False)
     order = [c for c in cats['類型'] if c not in ['期貨', '現金']] + ([c for c in ['期貨', '現金'] if c in cats['類型'].values])
     cats = cats.set_index('類型').loc[order].reset_index()
@@ -438,62 +469,63 @@ else:
         all_l = view_df["名稱"].tolist()
         if not st.session_state.visible_items or not st.session_state.visible_items.intersection(set(all_l)): st.session_state.visible_items = set(all_l)
 
-    # ========================================================
-    # ⚡ 局部渲染 Fragment: 趨勢圖
-    # ========================================================
-    @st_fragment
-    def render_overall_trend_section(history_snapshots, selected_cat, display_currency, usd_twd, btc_usd, unit, privacy):
-        st.divider()
-        st.subheader(f"📈 {'全部淨資產' if selected_cat is None else selected_cat} 變化趨勢")
-        if len(history_snapshots) > 0:
-            hist_d = []
-            for d_str, v in history_snapshots.items():
-                if isinstance(v, dict) and v.get("version") == "v2":
-                    d_data = v.get(display_currency, v.get("TWD"))
-                    val, cost, liab = d_data.get("value", 0), d_data.get("cost", 0), d_data.get("liability", 0.0)
-                    vc = val - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("value", 0)
-                    cc = cost - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("cost", 0)
-                    hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
-            
-            hdf = pd.DataFrame(hist_d)
-            if not hdf.empty:
-                hdf['Date'] = pd.to_datetime(hdf['Date'])
-                hdf = hdf.sort_values('Date')
-
-                cr, cp = st.columns([2.5, 1.5])
-                with cr:
-                    tr = st.radio("選擇時間區間", ["1週", "1個月", "3個月", "半年", "1年", "全部"], index=1, horizontal=True, label_visibility="collapsed")
-                tdy = pd.to_datetime(date.today())
-                sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else hdf['Date'].min() - pd.Timedelta(days=3)
-                
-                fdf = hdf[hdf['Date'] >= sd].copy()
-                with cp:
-                    if not fdf.empty:
-                        sv, ev = fdf['Value'].iloc[0], fdf['Value'].iloc[-1]
-                        cv = ev - sv
-                        cp_str = "∞%" if abs(sv)<1e-5 and cv>0 else "0.00%" if abs(sv)<1e-5 and cv<=0 else f"{(cv/abs(sv)*100):.2f}%"
-                        if privacy: st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
-                        else:
-                            c_clr = "#4ade80" if cv>0 else "#ef4444" if cv<0 else "#94a3b8"
-                            sgn = "+" if cv>0 else ""
-                            vs = f"{sgn}{unit} {abs(cv):,.0f}" if display_currency != "BTC" else f"{sgn}BTC {abs(cv):,.4f}"
-                            st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
-                
-                if not fdf.empty:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3)))
-                    fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=3)))
-                    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
-                    st.plotly_chart(fig, use_container_width=True)
-
-    render_overall_trend_section(st.session_state.history_snapshots, st.session_state.selected_category, display_currency, usd_twd, btc_usd, unit.replace('$', '&#36;'), privacy)
-
-    # ========================================================
-    # 📝 持倉明細表
-    # ========================================================
+# ========================================================
+# ⚡ 局部渲染 Fragment: 趨勢圖
+# ========================================================
+@st_fragment
+def render_overall_trend_section(history_snapshots, selected_cat, display_currency, usd_twd, btc_usd, unit, privacy):
     st.divider()
-    st.subheader("持倉明細 (全部)")
-    with st.expander("點此展開 / 收合明細表", expanded=False):
+    st.subheader(f"📈 {'全部淨資產' if selected_cat is None else selected_cat} 變化趨勢")
+    if len(history_snapshots) > 0:
+        hist_d = []
+        for d_str, v in history_snapshots.items():
+            if isinstance(v, dict) and v.get("version") == "v2":
+                d_data = v.get(display_currency, v.get("TWD"))
+                val, cost, liab = d_data.get("value", 0), d_data.get("cost", 0), d_data.get("liability", 0.0)
+                vc = val - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("value", 0)
+                cc = cost - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("cost", 0)
+                hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
+        
+        hdf = pd.DataFrame(hist_d)
+        if not hdf.empty:
+            hdf['Date'] = pd.to_datetime(hdf['Date'])
+            hdf = hdf.sort_values('Date')
+
+            cr, cp = st.columns([2.5, 1.5])
+            with cr:
+                tr = st.radio("選擇時間區間", ["1週", "1個月", "3個月", "半年", "1年", "全部"], index=1, horizontal=True, label_visibility="collapsed")
+            tdy = pd.to_datetime(date.today())
+            sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else hdf['Date'].min() - pd.Timedelta(days=3)
+            
+            fdf = hdf[hdf['Date'] >= sd].copy()
+            with cp:
+                if not fdf.empty:
+                    sv, ev = fdf['Value'].iloc[0], fdf['Value'].iloc[-1]
+                    cv = ev - sv
+                    cp_str = "∞%" if abs(sv)<1e-5 and cv>0 else "0.00%" if abs(sv)<1e-5 and cv<=0 else f"{(cv/abs(sv)*100):.2f}%"
+                    if privacy: st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
+                    else:
+                        c_clr = "#4ade80" if cv>0 else "#ef4444" if cv<0 else "#94a3b8"
+                        sgn = "+" if cv>0 else ""
+                        vs = f"{sgn}{unit} {abs(cv):,.0f}" if display_currency != "BTC" else f"{sgn}BTC {abs(cv):,.4f}"
+                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:14px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
+            
+            if not fdf.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3)))
+                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=3)))
+                fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
+                st.plotly_chart(fig, use_container_width=True)
+
+render_overall_trend_section(st.session_state.history_snapshots, st.session_state.selected_category, display_currency, usd_twd, btc_usd, unit.replace('$', '&#36;'), privacy)
+
+# ========================================================
+# 📝 持倉明細表
+# ========================================================
+st.divider()
+st.subheader("持倉明細 (全部)")
+with st.expander("點此展開 / 收合明細表", expanded=False):
+    if not df.empty:
         def det_stat(r):
             if r.get("is_cash"): return "現金"
             if r["數量"] > 0.0001: return "持有中(做多)"
@@ -577,98 +609,99 @@ else:
                 st.dataframe(m_df, use_container_width=True, hide_index=True)
             else: st.dataframe(d_prem, use_container_width=True, hide_index=True, column_config=col_cfg)
 
-    # ========================================================
-    # ⚡ 局部渲染 Fragment: 個別標的分析
-    # ========================================================
-    @st_fragment
-    def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
-        st.divider()
-        st.subheader("🔍 個別標的進階分析")
-        if transactions:
-            tdf = pd.DataFrame(transactions)
-            tdf["date_obj"] = pd.to_datetime(tdf["date"])
-            tdf["target_label"] = tdf.apply(lambda r: f"{r['name']} ({r['ticker']})" if r['ticker'] else r['name'], axis=1)
-            sel_t = st.selectbox("選擇標的", sorted(tdf["target_label"].unique()), index=None, placeholder="🔍 搜尋...", label_visibility="collapsed")
-            
-            if sel_t:
-                inc_prem = st.checkbox("圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False))
-                with st.spinner("載入歷史資料中..."):
-                    atx = tdf[tdf["target_label"] == sel_t].sort_values("date_obj").copy()
-                    tkr = atx.iloc[0]["ticker"]
-                    
-                    hdf = pd.DataFrame()
-                    if tkr: hdf = get_historical_prices_for_chart(tkr, atx["date_obj"].min() - pd.Timedelta(days=7))
-                    
-                    cal = pd.date_range(start=atx["date_obj"].min(), end=pd.to_datetime(date.today()))
-                    cs, cac = 0.0, 0.0
-                    d_recs = []
-                    
-                    for d, dt in atx.groupby("date_obj"):
-                        for _, tx in dt.iterrows():
-                            q, p, a = float(tx["quantity"]), float(tx["price"]), tx["type"]
-                            if a == "買進":
-                                if cs >= 0:
-                                    ns = cs + q
-                                    cac = (cs * cac + q * p) / ns if ns > 0 else 0
-                                    cs = ns
-                                else:
-                                    cq = min(q, abs(cs))
-                                    cs += cq
-                                    rem = q - cq
-                                    if rem > 0: cs, cac = rem, p
-                                    elif abs(cs) < 1e-5: cs, cac = 0.0, 0.0
-                            elif a == "賣出":
-                                if cs <= 0:
-                                    ns = abs(cs) + q
-                                    cac = (abs(cs) * cac + q * p) / ns if ns > 0 else 0
-                                    cs -= q
-                                else:
-                                    sq = min(q, cs)
-                                    cs -= sq
-                                    rem = q - sq
-                                    if rem > 0: cs, cac = -rem, p
-                                    elif abs(cs) < 1e-5: cs, cac = 0.0, 0.0
-                            elif a in ["Sell Put", "Covered Call", "配息"]:
-                                if inc_prem and abs(cs) > 1e-5:
-                                    cac = (cs * cac - p) / cs
-                        d_recs.append({"date": d, "shares": cs, "cost": cs * cac, "avg_cost": cac})
-                    
-                    ddf = pd.DataFrame(index=cal).join(pd.DataFrame(d_recs).set_index("date"), how="left").ffill().fillna(0)
+# ========================================================
+# ⚡ 局部渲染 Fragment: 個別標的分析
+# ========================================================
+@st_fragment
+def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
+    st.divider()
+    st.subheader("🔍 個別標的進階分析")
+    if transactions:
+        tdf = pd.DataFrame(transactions)
+        tdf["date_obj"] = pd.to_datetime(tdf["date"])
+        tdf["target_label"] = tdf.apply(lambda r: f"{r['name']} ({r['ticker']})" if r['ticker'] else r['name'], axis=1)
+        sel_t = st.selectbox("選擇標的", sorted(tdf["target_label"].unique()), index=None, placeholder="🔍 搜尋...", label_visibility="collapsed")
+        
+        if sel_t:
+            inc_prem = st.checkbox("圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False))
+            with st.spinner("載入歷史資料中..."):
+                atx = tdf[tdf["target_label"] == sel_t].sort_values("date_obj").copy()
+                tkr = atx.iloc[0]["ticker"]
+                
+                hdf = pd.DataFrame()
+                if tkr: hdf = get_historical_prices_for_chart(tkr, atx["date_obj"].min() - pd.Timedelta(days=7))
+                
+                cal = pd.date_range(start=atx["date_obj"].min(), end=pd.to_datetime(date.today()))
+                cs, cac = 0.0, 0.0
+                d_recs = []
+                
+                for d, dt in atx.groupby("date_obj"):
+                    for _, tx in dt.iterrows():
+                        q, p, a = float(tx["quantity"]), float(tx["price"]), tx["type"]
+                        if a == "買進":
+                            if cs >= 0:
+                                ns = cs + q
+                                cac = (cs * cac + q * p) / ns if ns > 0 else 0
+                                cs = ns
+                            else:
+                                cq = min(q, abs(cs))
+                                cs += cq
+                                rem = q - cq
+                                if rem > 0: cs, cac = rem, p
+                                elif abs(cs) < 1e-5: cs, cac = 0.0, 0.0
+                        elif a == "賣出":
+                            if cs <= 0:
+                                ns = abs(cs) + q
+                                cac = (abs(cs) * cac + q * p) / ns if ns > 0 else 0
+                                cs -= q
+                            else:
+                                sq = min(q, cs)
+                                cs -= sq
+                                rem = q - sq
+                                if rem > 0: cs, cac = -rem, p
+                                elif abs(cs) < 1e-5: cs, cac = 0.0, 0.0
+                        elif a in ["Sell Put", "Covered Call", "配息"]:
+                            if inc_prem and abs(cs) > 1e-5:
+                                cac = (cs * cac - p) / cs
+                    d_recs.append({"date": d, "shares": cs, "cost": cs * cac, "avg_cost": cac})
+                
+                ddf = pd.DataFrame(index=cal).join(pd.DataFrame(d_recs).set_index("date"), how="left").ffill().fillna(0)
+                if not hdf.empty:
+                    ddf = ddf.join(hdf["Close"])
+                    ddf["Close"] = ddf["Close"].ffill()
+                    ddf["Value"] = ddf["shares"] * ddf["Close"]
+                else:
+                    ddf["Close"], ddf["Value"] = None, ddf["cost"]
+                
+                st.markdown(f"*(註: 圖表以標的原始計價幣別呈現)*")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
+                    fig1 = go.Figure()
+                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2)))
+                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=2)))
+                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
+                    st.plotly_chart(fig1, use_container_width=True)
+                with c2:
+                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>🎯 價格走勢</div>", unsafe_allow_html=True)
                     if not hdf.empty:
-                        ddf = ddf.join(hdf["Close"])
-                        ddf["Close"] = ddf["Close"].ffill()
-                        ddf["Value"] = ddf["shares"] * ddf["Close"]
-                    else:
-                        ddf["Close"], ddf["Value"] = None, ddf["cost"]
-                    
-                    st.markdown(f"*(註: 圖表以標的原始計價幣別呈現)*")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
-                        fig1 = go.Figure()
-                        fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2)))
-                        fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=2)))
-                        fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
-                        st.plotly_chart(fig1, use_container_width=True)
-                    with c2:
-                        st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>🎯 價格走勢</div>", unsafe_allow_html=True)
-                        if not hdf.empty:
-                            fig2 = go.Figure()
-                            fig2.add_trace(go.Scatter(x=hdf.index, y=hdf['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2)))
-                            fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
-                            st.plotly_chart(fig2, use_container_width=True)
+                        fig2 = go.Figure()
+                        fig2.add_trace(go.Scatter(x=hdf.index, y=hdf['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2)))
+                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy))
+                        st.plotly_chart(fig2, use_container_width=True)
 
-    render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
+render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
 
-    st.divider()
-    st.subheader("交易紀錄管理")
-    if st.session_state.transactions:
-        tx_df = pd.DataFrame(st.session_state.transactions)
-        tx_df["date_obj"] = pd.to_datetime(tx_df["date"]).dt.date
-        tx_df = tx_df.sort_values("date", ascending=False).reset_index(drop=True)
-        st.dataframe(tx_df, use_container_width=True)
-    
-    st.divider()
-    c1, c2 = st.columns(2)
-    with c1: st.download_button("下載持倉 CSV", df.to_csv(index=False).encode("utf-8-sig"), f"holdings.csv", "text/csv")
-    with c2: st.download_button("下載交易紀錄 CSV", pd.DataFrame(st.session_state.transactions).to_csv(index=False).encode("utf-8-sig"), f"tx.csv", "text/csv")
+st.divider()
+st.subheader("交易紀錄管理")
+if st.session_state.transactions:
+    tx_df = pd.DataFrame(st.session_state.transactions)
+    tx_df["date_obj"] = pd.to_datetime(tx_df["date"]).dt.date
+    tx_df = tx_df.sort_values("date", ascending=False).reset_index(drop=True)
+    st.dataframe(tx_df, use_container_width=True)
+
+st.divider()
+c1, c2 = st.columns(2)
+with c1:
+    if not df.empty: st.download_button("下載持倉 CSV", df.to_csv(index=False).encode("utf-8-sig"), f"holdings.csv", "text/csv")
+with c2: st.download_button("下載交易紀錄 CSV", pd.DataFrame(st.session_state.transactions).to_csv(index=False).encode("utf-8-sig"), f"tx.csv", "text/csv")
