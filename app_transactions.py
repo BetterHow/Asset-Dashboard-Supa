@@ -14,7 +14,7 @@ from supabase import create_client, Client
 st.set_page_config(page_title="個人加密資產金庫", page_icon="🔐", layout="wide")
 
 # ========================================================
-# ⚡ 效能優化：局部渲染技術
+# ⚡ 效能優化：引入局部渲染技術
 # ========================================================
 if hasattr(st, "fragment"):
     st_fragment = st.fragment
@@ -99,7 +99,7 @@ if st.session_state.user is None:
     st.stop()
 
 # ========================================================
-# 📊 正式 App 儀表板
+# 📊 正式 App 初始化與狀態管理
 # ========================================================
 st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
 
@@ -245,6 +245,31 @@ def safe_float(text):
     except Exception: return None
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
+
+def format_dynamic_qty(qty, price, currency):
+    if pd.isna(qty) or qty is None: return "—"
+    try: qty_val = float(qty)
+    except: return str(qty)
+    try: price_val = float(price)
+    except: price_val = 0.0
+    
+    if currency == "TWD": price_usd = price_val / usd_twd
+    elif currency == "BTC": price_usd = price_val * (btc_usd if btc_usd else 95000.0)
+    else: price_usd = price_val
+    
+    if price_usd >= 10000: decimals = 4
+    elif price_usd >= 5000: decimals = 3
+    elif price_usd >= 1500: decimals = 2
+    elif price_usd >= 500: decimals = 1
+    else:
+        if qty_val % 1 != 0: decimals = 2
+        else: decimals = 0
+    return f"{qty_val:,.{decimals}f}"
+
+def fmt(num, decimals=2):
+    if pd.isna(num) or num is None: return "—"
+    if isinstance(num, (int, float)) and 0 < num < 1: return f"{num:,.4f}"
+    return f"{num:,.{decimals}f}"
 
 # ========================================================
 # 🚀 核心資料與數值預先計算區
@@ -419,7 +444,8 @@ with c_tdc:
     else:
         color = "#4ade80" if tc_val>0 else "#ef4444" if tc_val<0 else "#94a3b8"
         sign = "+" if tc_val>0 else ""
-        vs = f"{sign}{su} {abs(tc_val):,.0f}" if display_currency != "BTC" else f"{sign}BTC {abs(tc_val):,.4f}"
+        def format_tc_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
+        vs = f"{sign}{su} {format_tc_val(abs(tc_val), display_currency)}"
         st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{color};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
 
 opts = ["TWD", "USD", "BTC"]
@@ -508,7 +534,8 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                     else:
                         c_clr = "#4ade80" if cv>0 else "#ef4444" if cv<0 else "#94a3b8"
                         sgn = "+" if cv>0 else ""
-                        vs = f"{sgn}{unit} {abs(cv):,.0f}" if display_currency != "BTC" else f"{sgn}BTC {abs(cv):,.4f}"
+                        def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
+                        vs = f"{sgn}{unit} {format_cv_val(abs(cv), display_currency)}"
                         st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
             
             if not fdf.empty:
@@ -518,14 +545,13 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3)))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=3)))
+                
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                 
-                # 補回：hovermode 與 dragmode 設定
                 fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
-                # 補回：scrollZoom
                 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
 render_overall_trend_section(st.session_state.history_snapshots, st.session_state.selected_category, display_currency, usd_twd, btc_usd, unit.replace('$', '&#36;'), privacy)
@@ -694,14 +720,13 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     fig1 = go.Figure()
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2)))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=2)))
+                    
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
-                    # 補回：hovermode 與 dragmode 設定
                     fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
-                    # 補回：scrollZoom
                     st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
                 with c2:
@@ -728,20 +753,112 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        # 補回：hovermode="closest" 與 dragmode 設定
                         fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
-                        # 補回：scrollZoom
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
 
+# ========================================================
+# 📝 交易紀錄管理 (完美還原自訂排版)
+# ========================================================
 st.divider()
 st.subheader("交易紀錄管理")
 if st.session_state.transactions:
     tx_df = pd.DataFrame(st.session_state.transactions)
     tx_df["date_obj"] = pd.to_datetime(tx_df["date"]).dt.date
     tx_df = tx_df.sort_values("date", ascending=False).reset_index(drop=True)
-    st.dataframe(tx_df, use_container_width=True)
+    min_d, max_d, today_d = tx_df["date_obj"].min(), tx_df["date_obj"].max(), date.today()
+    
+    tx_df["target_label"] = tx_df.apply(lambda row: f"{row['name']} ({row['ticker']})" if row['ticker'] else row['name'], axis=1)
+    target_options = ["全部"] + sorted(tx_df["target_label"].unique().tolist())
+
+    f_c1, f_c2, f_c3 = st.columns(3)
+    with f_c1:
+        date_preset = st.selectbox("篩選時間範圍", ["全部", "本月", "半年", "一年", "自訂區間"])
+        date_range = st.date_input("選擇日期", value=(min_d, max_d), min_value=min_d, max_value=max_d) if date_preset == "自訂區間" else (min_d, max_d) if date_preset == "全部" else (today_d.replace(day=1), today_d) if date_preset == "本月" else (today_d - timedelta(days=183), today_d) if date_preset == "半年" else (today_d - timedelta(days=365), today_d)
+    with f_c2: selected_target = st.selectbox("篩選標的", target_options)
+    with f_c3: action_filter = st.selectbox("篩選動作", ["全部", "買進", "賣出", "Sell Put", "Covered Call", "配息"])
+
+    if isinstance(date_range, tuple):
+        if len(date_range) == 2: tx_df = tx_df[(tx_df["date_obj"] >= date_range[0]) & (tx_df["date_obj"] <= date_range[1])]
+        elif len(date_range) == 1: tx_df = tx_df[tx_df["date_obj"] == date_range[0]]
+    if selected_target != "全部": tx_df = tx_df[tx_df["target_label"] == selected_target]
+    if action_filter != "全部": tx_df = tx_df[tx_df["type"] == action_filter]
+    st.caption(f"共找到 {len(tx_df)} 筆紀錄")
+
+    def render_tx_rows(df_to_render):
+        for i, row in df_to_render.iterrows():
+            if st.session_state.editing_id == row["id"]:
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
+                with c1: new_date = st.date_input("日期", value=date.fromisoformat(row["date"]), key=f"ed_d_{row['id']}", label_visibility="collapsed")
+                with c2: 
+                    type_options_list = ["買進", "賣出", "Sell Put", "Covered Call", "配息"]
+                    current_type_idx = type_options_list.index(row["type"]) if row["type"] in type_options_list else 0
+                    new_type = st.selectbox("動作", type_options_list, index=current_type_idx, key=f"ed_t_{row['id']}", label_visibility="collapsed")
+                with c3:
+                    cc1, cc2 = st.columns([1.5, 1])
+                    new_name = cc1.text_input("名稱", value=row["name"], key=f"ed_n_{row['id']}", label_visibility="collapsed")
+                    new_ticker = cc2.text_input("代號", value=row["ticker"], key=f"ed_tk_{row['id']}", label_visibility="collapsed")
+                with c4:
+                    cc1, cc2 = st.columns(2)
+                    new_qty = cc1.text_input("數量", value=str(row["quantity"]), key=f"ed_q_{row['id']}", label_visibility="collapsed")
+                    new_price = cc2.text_input("價格", value=str(row["price"]), key=f"ed_p_{row['id']}", label_visibility="collapsed")
+                with c5: new_curr = st.selectbox("幣別", ["TWD", "USD"], index=0 if row["currency"]=="TWD" else 1, key=f"ed_c_{row['id']}", label_visibility="collapsed")
+                with c6: new_note = st.text_input("備註", value=row.get("note", ""), key=f"ed_nt_{row['id']}", label_visibility="collapsed")
+                with c7:
+                    b1, b2 = st.columns([0.9, 0.9])
+                    if b1.button("儲存", key=f"save_tx_{row['id']}", type="primary", use_container_width=True):
+                        for idx, t in enumerate(st.session_state.transactions):
+                            if t["id"] == row["id"]:
+                                st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr, "note": new_note})
+                                break
+                        save_data("transactions", st.session_state.transactions)
+                        st.session_state.editing_id = None
+                        fetch_all_prices.clear()
+                        st.rerun()
+                    if b2.button("取消", key=f"cancel_tx_{row['id']}", use_container_width=True):
+                        st.session_state.editing_id = None
+                        st.rerun()
+            else:
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
+                if privacy:
+                    qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
+                else:
+                    qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
+                    price_display = fmt(row['price'])
+                    
+                with c1: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['date']}</div>", unsafe_allow_html=True)
+                with c2: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['type']}</div>", unsafe_allow_html=True)
+                with c3: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['name']}（{row['ticker']}）</div>", unsafe_allow_html=True)
+                with c4: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{qty_display} × {price_display}</div>", unsafe_allow_html=True)
+                with c5: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['currency']}</div>", unsafe_allow_html=True)
+                with c6: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row.get('note', '')}</div>", unsafe_allow_html=True)
+                with c7:
+                    b1, b2 = st.columns([0.9, 0.9])
+                    if b1.button("編輯", key=f"edit_{row['id']}"):
+                        st.session_state.editing_id = row["id"]
+                        st.rerun()
+                    if b2.button("刪除", key=f"del_{row['id']}"):
+                        st.session_state.transactions = [t for t in st.session_state.transactions if t["id"] != row["id"]]
+                        save_data("transactions", st.session_state.transactions)
+                        st.success("已刪除")
+                        fetch_all_prices.clear()
+                        st.rerun()
+
+    if not tx_df.empty:
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([1.0, 0.6, 1.4, 1.3, 0.5, 1.2, 1.1])
+        h1.markdown("<div style='text-align:center'><b>日期</b></div>", unsafe_allow_html=True)
+        h2.markdown("<div style='text-align:center'><b>動作</b></div>", unsafe_allow_html=True)
+        h3.markdown("<div style='text-align:center'><b>標的</b></div>", unsafe_allow_html=True)
+        h4.markdown("<div style='text-align:center'><b>明細</b></div>", unsafe_allow_html=True)
+        h5.markdown("<div style='text-align:center'><b>幣別</b></div>", unsafe_allow_html=True)
+        h6.markdown("<div style='text-align:center'><b>備註</b></div>", unsafe_allow_html=True)
+        h7.markdown("")
+        render_tx_rows(tx_df.head(20))
+        if len(tx_df) > 20:
+            with st.expander(f"展開顯示其餘 {len(tx_df) - 20} 筆紀錄..."): render_tx_rows(tx_df.iloc[20:])
+    else: st.info("沒有符合條件的紀錄。")
+else: st.caption("尚無交易紀錄")
 
 st.divider()
 c1, c2 = st.columns(2)
