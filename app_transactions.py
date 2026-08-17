@@ -14,7 +14,7 @@ from supabase import create_client, Client
 st.set_page_config(page_title="個人加密資產金庫", page_icon="🔐", layout="wide")
 
 # ========================================================
-# ⚡ 效能優化：局部渲染技術
+# ⚡ 效能優化：引入局部渲染技術
 # ========================================================
 if hasattr(st, "fragment"):
     st_fragment = st.fragment
@@ -24,7 +24,7 @@ else:
     def st_fragment(func): return func
 
 # ========================================================
-# 🚀 零知識加密與 Supabase 連線
+# 🚀 零知識加密與 Supabase 連線核心
 # ========================================================
 @st.cache_resource
 def init_supabase() -> Client:
@@ -99,44 +99,46 @@ if st.session_state.user is None:
     st.stop()
 
 # ========================================================
-# 📊 正式 App 初始化與輔助函數
+# 📊 正式 App 初始化與狀態管理
 # ========================================================
 st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
 
-for k, default in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
-    if k not in st.session_state: st.session_state[k] = load_data(k, default)
+for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
+    if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
 
-for k, default in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", "")]:
-    if k not in st.session_state: st.session_state[k] = default
+for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", "")]:
+    if k not in st.session_state: st.session_state[k] = def_val
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_rate(sym: str):
+def get_rate(symbol: str):
     try:
-        t = yf.Ticker(sym)
+        t = yf.Ticker(symbol)
         rate = t.fast_info.get("last_price")
         if rate: return round(float(rate), 4)
-        h = t.history(period="5d")
-        if not h.empty: return round(float(h["Close"].dropna().iloc[-1]), 4)
-    except: pass
+        hist = t.history(period="5d")
+        if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
+    except Exception: pass
     return None
 
-usd_twd, btc_usd = get_rate("USDTWD=X") or 32.4, get_rate("BTC-USD") or 95000.0
+usd_twd = get_rate("USDTWD=X") or 32.4
+btc_usd = get_rate("BTC-USD") or 95000.0
 EXTRA_RATES = {"EUR/TWD": "EURTWD=X", "JPY/TWD": "JPYTWD=X", "GBP/TWD": "GBPTWD=X", "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD"}
 
 def get_latest_price(ticker: str):
     if not ticker: return None
     t = ticker.strip().upper()
     cl = t.replace(".TW", "").replace(".TWO", "")
-    is_tw = cl.isdigit() or (len(cl)>1 and cl[:-1].isdigit() and cl[-1] in ["B", "L", "R"])
+    is_tw = cl.isdigit() or (len(cl) > 1 and cl[:-1].isdigit() and cl[-1] in ["B", "L", "R"])
     cands = [f"{cl}.TW", f"{cl}.TWO"] if is_tw else [t] + ([f"{t}.TW", f"{t}.TWO"] if not t.endswith((".TW", ".TWO")) and t.isalnum() and not t.isalpha() else [])
+
     for sym in cands:
         try:
             stock = yf.Ticker(sym)
-            p = stock.fast_info.get("last_price")
-            if p is not None and not pd.isna(p) and p > 0: return round(float(p), 4)
-            h = stock.history(period="1mo", auto_adjust=False)
-            if not h.empty: return round(float(h["Close"].dropna().iloc[-1]), 4)
-        except: continue
+            price = stock.fast_info.get("last_price")
+            if price is not None and not pd.isna(price) and price > 0: return round(float(price), 4)
+            hist = stock.history(period="1mo", auto_adjust=False)
+            if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
+        except Exception: continue
     return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -144,27 +146,32 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
     if not ticker: return pd.DataFrame()
     t = ticker.strip().upper()
     cl = t.replace(".TW", "").replace(".TWO", "")
-    is_tw = cl.isdigit() or (len(cl)>1 and cl[:-1].isdigit() and cl[-1] in ["B", "L", "R"])
+    is_tw = cl.isdigit() or (len(cl) > 1 and cl[:-1].isdigit() and cl[-1] in ["B", "L", "R"])
     cands = [f"{cl}.TW", f"{cl}.TWO"] if is_tw else [t] + ([f"{t}.TW", f"{t}.TWO"] if not t.endswith((".TW", ".TWO")) and t.isalnum() and not t.isalpha() else [])
+
     for sym in cands:
         try:
-            h = yf.Ticker(sym).history(start=start_date, auto_adjust=False)
-            if not h.empty:
-                h.index = h.index.tz_localize(None).normalize()
-                return h
+            hist = yf.Ticker(sym).history(start=start_date, auto_adjust=False)
+            if not hist.empty:
+                hist.index = hist.index.tz_localize(None).normalize()
+                return hist
         except: continue
     return pd.DataFrame()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_all_prices(tickers: tuple):
-    res = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
-        f2t = {ex.submit(get_latest_price, t): t for t in tickers}
-        for f in concurrent.futures.as_completed(f2t):
-            try: res[f2t[f]] = f.result()
-            except: res[f2t[f]] = None
-    return res
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        f2t = {executor.submit(get_latest_price, t): t for t in tickers}
+        for future in concurrent.futures.as_completed(f2t):
+            t = f2t[future]
+            try: results[t] = future.result()
+            except Exception: results[t] = None
+    return results
 
+# ========================================================
+# 🚀 做空與多頭會計核心引擎
+# ========================================================
 def calculate_holdings(transactions):
     holdings = {}
     for t in transactions:
@@ -173,53 +180,71 @@ def calculate_holdings(transactions):
         if key not in holdings:
             holdings[key] = {"名稱": t.get("name", key), "代號": t.get("ticker", ""), "幣別": t.get("currency", "TWD"), "類型": t.get("type_category", "其他"), "數量": 0.0, "avg_cost": 0.0, "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0}
         
-        h, qty, price, action = holdings[key], float(t.get("quantity", 0)), float(t.get("price", 0)), t["type"]
+        h = holdings[key]
+        qty = float(t.get("quantity", 0))
+        price = float(t.get("price", 0))
+        action = t["type"]
+        
         if action in ["Sell Put", "Covered Call", "配息"]:
-            amt = price if qty == 0 else qty * price
-            if action == "Covered Call": h["CC權利金"] += amt; h["已實現損益"] += amt
-            elif action == "Sell Put": h["SP權利金"] += amt; h["已實現損益"] += amt
-            elif action == "配息": h["股息"] += amt; h["已實現損益"] += amt
+            amount = price if qty == 0 else qty * price
+            if action == "Covered Call": h["CC權利金"] += amount; h["已實現損益"] += amount
+            elif action == "Sell Put": h["SP權利金"] += amount; h["已實現損益"] += amount
+            elif action == "配息": h["股息"] += amount; h["已實現損益"] += amount
             continue
 
         if action == "買進":
             h["歷史買進數量"] += qty
-            if h["數量"] >= 0:
-                nq = h["數量"] + qty
-                h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / nq if nq > 0 else 0
-                h["數量"] = nq
-            else:
-                cq = min(qty, abs(h["數量"]))
-                h["已實現損益"] += (h["avg_cost"] - price) * cq 
-                h["數量"] += cq
-                rem = qty - cq
-                if rem > 0: h["數量"], h["avg_cost"] = rem, price
-                elif abs(h["數量"]) < 1e-5: h["數量"], h["avg_cost"] = 0.0, 0.0
+            if h["數量"] >= 0: 
+                new_qty = h["數量"] + qty
+                h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / new_qty if new_qty > 0 else 0
+                h["數量"] = new_qty
+            else: 
+                cover_qty = min(qty, abs(h["數量"]))
+                h["已實現損益"] += (h["avg_cost"] - price) * cover_qty 
+                h["數量"] += cover_qty
+                remaining_buy = qty - cover_qty
+                if remaining_buy > 0: 
+                    h["數量"] = remaining_buy
+                    h["avg_cost"] = price
+                elif abs(h["數量"]) < 1e-5:
+                    h["數量"] = 0.0
+                    h["avg_cost"] = 0.0
+                    
         elif action == "賣出":
             h["歷史賣出數量"] += qty
-            if h["數量"] <= 0:
-                nq = abs(h["數量"]) + qty
-                h["avg_cost"] = (abs(h["數量"]) * h["avg_cost"] + qty * price) / nq if nq > 0 else 0
+            if h["數量"] <= 0: 
+                new_qty_abs = abs(h["數量"]) + qty
+                h["avg_cost"] = (abs(h["數量"]) * h["avg_cost"] + qty * price) / new_qty_abs if new_qty_abs > 0 else 0
                 h["數量"] -= qty
-            else:
-                sq = min(qty, h["數量"])
-                h["已實現損益"] += (price - h["avg_cost"]) * sq 
-                h["數量"] -= sq
-                rem = qty - sq
-                if rem > 0: h["數量"], h["avg_cost"] = -rem, price
-                elif abs(h["數量"]) < 1e-5: h["數量"], h["avg_cost"] = 0.0, 0.0
+            else: 
+                sell_qty = min(qty, h["數量"])
+                h["已實現損益"] += (price - h["avg_cost"]) * sell_qty 
+                h["數量"] -= sell_qty
+                remaining_sell = qty - sell_qty
+                if remaining_sell > 0: 
+                    h["數量"] = -remaining_sell
+                    h["avg_cost"] = price
+                elif abs(h["數量"]) < 1e-5:
+                    h["數量"] = 0.0
+                    h["avg_cost"] = 0.0
 
-    res = []
-    for k, h in holdings.items():
+    result = []
+    for key, h in holdings.items():
         h["原始總成本"] = h["數量"] * h["avg_cost"] 
         if abs(h["數量"]) > 0.0001 or h["CC權利金"] > 0 or h["SP權利金"] > 0 or h["股息"] > 0 or h["已實現損益"] != 0 or h["歷史買進數量"] > 0 or h["歷史賣出數量"] > 0:
-            res.append({"名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"], "數量": h["數量"], "原始總成本": h["原始總成本"], "平均成本": h["avg_cost"], "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"], "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], "is_cash": False})
-    return res
+            result.append({
+                "名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"],
+                "數量": h["數量"], "原始總成本": h["原始總成本"], "平均成本": h["avg_cost"],
+                "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
+                "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], "is_cash": False
+            })
+    return result
 
-def safe_float(v):
-    try: return float(v) if str(v).strip() else None
-    except: return None
+def safe_float(text):
+    try: return float(text) if str(text).strip() else None
+    except Exception: return None
 
-def mask_val(v): return "＊＊＊＊" if st.session_state.privacy_mode else v
+def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
 def format_dynamic_qty(qty, price, currency):
     if pd.isna(qty) or qty is None: return "—"
@@ -240,6 +265,11 @@ def format_dynamic_qty(qty, price, currency):
         if qty_val % 1 != 0: decimals = 2
         else: decimals = 0
     return f"{qty_val:,.{decimals}f}"
+
+def fmt(num, decimals=2):
+    if pd.isna(num) or num is None: return "—"
+    if isinstance(num, (int, float)) and 0 < num < 1: return f"{num:,.4f}"
+    return f"{num:,.{decimals}f}"
 
 # ========================================================
 # 💳 UI: 現金與負債管理模組 (完整回歸)
@@ -453,6 +483,7 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     fig_lib = go.Figure(data=[go.Pie(labels=lib_df["名稱"], values=lib_df["顯示金額"], pull=[0.03]*len(lib_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#EF553B", "#FFA15A", "#AB63FA", "#636EFA", "#00CC96"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>" if not st.session_state.privacy_mode else "%{label}<br>%{percent}<extra></extra>")])
                     fig_lib.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=300, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(fig_lib, use_container_width=True)
+        else: st.caption("目前無負債紀錄。")
 
 # ========================================================
 # 🚀 核心資料與數值預先計算區
@@ -672,7 +703,7 @@ if not df.empty:
         if not st.session_state.visible_items or not st.session_state.visible_items.intersection(set(all_l)): st.session_state.visible_items = set(all_l)
 
 # ========================================================
-# ⚡ 局部渲染 Fragment: 趨勢圖
+# ⚡ 局部渲染 Fragment: 趨勢圖 (補回互動設定與面積填色)
 # ========================================================
 @st_fragment
 def render_overall_trend_section(history_snapshots, selected_cat, display_currency, usd_twd, btc_usd, unit, privacy):
@@ -714,12 +745,56 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                         st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
             
             if not fdf.empty:
+                fdf['PnL'] = fdf['Value'] - fdf['Cost']
+                unit_str = unit.replace("$", "&#36;")
+                
+                def get_val_text_global(x):
+                    if x < 0: return f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>"
+                    elif x > 0: return f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>"
+                    else: return f"{unit_str} 0"
+
+                def get_pct_text_global(row):
+                    pnl, cost = row['PnL'], row['Cost']
+                    if abs(cost) <= 1e-5 and pnl > 0: return "<span style='color:#4ade80'>+∞%</span>"
+                    elif abs(cost) <= 1e-5 and pnl <= 0: return "0.00%"
+                    pct = (pnl / abs(cost) * 100) if abs(cost) > 0 else 0
+                    if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
+                    elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
+                    else: return "0.00%"
+
+                fdf['pnl_val_text'] = fdf['PnL'].apply(get_val_text_global)
+                fdf['pnl_pct_text'] = fdf.apply(get_pct_text_global, axis=1)
+
                 fdf['Value_Gain'] = fdf[['Value', 'Cost']].max(axis=1)
                 fdf['Value_Loss'] = fdf[['Value', 'Cost']].min(axis=1)
                 
+                y_max = fdf[['Value', 'Cost']].max().max()
+                y_min = fdf[['Value', 'Cost']].min().min()
+                y_range = y_max - y_min
+                if y_range == 0: y_range = 1
+                
+                fdf['pnl_y'] = fdf[['Value', 'Cost']].min(axis=1) - (y_range * 0.005)
+                fdf['pct_y'] = fdf[['Value', 'Cost']].min(axis=1) - (y_range * 0.010)
+
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3)))
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=3)))
+                val_name = '淨值' 
+                
+                if privacy:
+                    hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
+                    hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
+                    hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
+                    hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
+                else:
+                    hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
+                    hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
+                    hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
+                    hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
+
+                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['pct_y'], mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=fdf['pnl_pct_text'] if not privacy else None, hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False))
+                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['pnl_y'], mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=fdf['pnl_val_text'] if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False))
+                
+                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3), hovertemplate=hover_temp_cost))
+                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name=val_name, line=dict(color='#00CC96', width=3), hovertemplate=hover_temp_val))
                 
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                 fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
@@ -822,7 +897,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             else: st.dataframe(d_prem, use_container_width=True, hide_index=True, column_config=col_cfg)
 
 # ========================================================
-# ⚡ 局部渲染 Fragment: 個別標的分析 
+# ⚡ 局部渲染 Fragment: 個別標的分析 (補回所有互動與視覺化)
 # ========================================================
 @st_fragment
 def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
@@ -839,6 +914,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
             with st.spinner("載入歷史資料中..."):
                 atx = tdf[tdf["target_label"] == sel_t].sort_values("date_obj").copy()
                 tkr = atx.iloc[0]["ticker"]
+                asset_currency = atx.iloc[0]["currency"]
                 
                 hdf = pd.DataFrame()
                 if tkr: hdf = get_historical_prices_for_chart(tkr, atx["date_obj"].min() - pd.Timedelta(days=7))
@@ -885,16 +961,61 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     ddf["Close"], ddf["Value"] = None, ddf["cost"]
                 
+                ddf['pnl'] = ddf['Value'] - ddf['cost']
+                currency_symbols = {"TWD": "NT&#36;", "USD": "US&#36;", "BTC": "BTC"}
+                asset_unit_str = currency_symbols.get(asset_currency, asset_currency)
+
+                def get_val_text_ind(x):
+                    if x < 0: return f"<span style='color:#ef4444'>-{asset_unit_str} {abs(x):,.0f}</span>"
+                    elif x > 0: return f"<span style='color:#4ade80'>+{asset_unit_str} {x:,.0f}</span>"
+                    else: return f"{asset_unit_str} 0"
+
+                def get_pct_text_ind(row):
+                    pnl, cost = row['pnl'], row['cost']
+                    if abs(cost) <= 1e-5 and pnl > 0: return "<span style='color:#4ade80'>+∞%</span>"
+                    elif abs(cost) <= 1e-5 and pnl <= 0: return "0.00%"
+                    pct = (pnl / abs(cost) * 100) if abs(cost) > 0 else 0
+                    if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
+                    elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
+                    else: return "0.00%"
+
+                ddf['pnl_val_text'] = ddf['pnl'].apply(get_val_text_ind)
+                ddf['pnl_pct_text'] = ddf.apply(get_pct_text_ind, axis=1)
+
                 ddf['Value_Gain'] = ddf[['Value', 'cost']].max(axis=1)
                 ddf['Value_Loss'] = ddf[['Value', 'cost']].min(axis=1)
                 
+                y_max_ind = ddf[['Value', 'cost']].max().max()
+                y_min_ind = ddf[['Value', 'cost']].min().min()
+                y_range_ind = y_max_ind - y_min_ind
+                if y_range_ind == 0: y_range_ind = 1
+                
+                ddf['pnl_y'] = ddf[['Value', 'cost']].min(axis=1) - (y_range_ind * 0.005)
+                ddf['pct_y'] = ddf[['Value', 'cost']].min(axis=1) - (y_range_ind * 0.010)
+
                 st.markdown(f"*(註: 圖表以標的原始計價幣別呈現)*")
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 持倉現值與成本變化</div>", unsafe_allow_html=True)
                     fig1 = go.Figure()
-                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2)))
-                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value'], mode='lines', name='淨值', line=dict(color='#00CC96', width=2)))
+                    
+                    val_name_ind = '淨值'
+                    if privacy:
+                        hover_val = " : ＊＊＊＊<extra>" + val_name_ind + "</extra>"
+                        hover_cost = " : ＊＊＊＊<extra>成本</extra>"
+                        hover_pnl = " : ＊＊＊＊<extra>損益</extra>"
+                        hover_pct = " : ＊＊＊＊<extra>$$ %</extra>"
+                    else:
+                        hover_val = " : " + asset_unit_str + " %{y:,.0f}<extra>" + val_name_ind + "</extra>"
+                        hover_cost = " : " + asset_unit_str + " %{y:,.0f}<extra>成本</extra>"
+                        hover_pnl = " : %{customdata}<extra>損益</extra>"
+                        hover_pct = " : %{customdata}<extra>$$ %</extra>"
+
+                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['pct_y'], mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=ddf['pnl_pct_text'] if not privacy else None, hovertemplate=hover_pct, showlegend=False))
+                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['pnl_y'], mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=ddf['pnl_val_text'] if not privacy else None, hovertemplate=hover_pnl, showlegend=False))
+                    
+                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=2), hovertemplate=hover_cost))
+                    fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value'], mode='lines', name=val_name_ind, line=dict(color='#00CC96', width=2), hovertemplate=hover_val))
                     
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
@@ -934,7 +1055,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
 
 # ========================================================
-# 📝 交易紀錄管理
+# 📝 交易紀錄管理 (包含登錄日期與自訂排版)
 # ========================================================
 st.divider()
 st.subheader("交易紀錄管理")
@@ -1000,7 +1121,7 @@ if st.session_state.transactions:
                         st.rerun()
             else:
                 c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
-                if st.session_state.privacy_mode:
+                if privacy:
                     qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
                 else:
                     qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
