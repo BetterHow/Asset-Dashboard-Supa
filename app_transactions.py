@@ -275,6 +275,38 @@ def _build_overall_trend_fig(
                       xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
     return fig
 
+@st.cache_data(show_spinner=False)
+def _build_holdings_bar_fig(labels, values_display, bar_text_labels, bar_pie_colors, privacy: bool, bar_font_size: int):
+    """Cached bar chart for main holdings configuration. High impact on category / privacy switches."""
+    fig = go.Figure(data=[go.Bar(
+        x=labels, y=values_display, text=bar_text_labels, textposition="outside",
+        textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
+        hovertemplate="%{x}<br>%{text}<extra></extra>" if privacy else "%{x}<br>%{text}<br>%{y:,.2f}<extra></extra>"
+    )])
+    fig.update_layout(
+        margin=dict(t=40, b=40, l=40, r=40), height=650, showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, tickfont=dict(size=16, color="#e2e8f0")),
+        yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy)
+    )
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _build_holdings_pie_fig(labels, values_abs, pie_text_labels, bar_pie_colors, privacy: bool):
+    """Cached pie chart for main holdings configuration. High impact on category / privacy switches."""
+    fig = go.Figure(data=[go.Pie(
+        labels=labels, values=values_abs, pull=[0.03]*len(labels),
+        text=pie_text_labels, textinfo="text", textposition="auto",
+        insidetextfont=dict(size=22, color="#ffffff"), outsidetextfont=dict(size=16, color="#e2e8f0"),
+        hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
+        marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)),
+        sort=False, direction="clockwise"
+    )])
+    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False,
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
+    return fig
+
 # ========================================================
 # 🚀 做空與多頭會計核心引擎
 # ========================================================
@@ -891,24 +923,25 @@ if not df.empty:
 
                 if show_bar_chart:
                     bar_font_size = 24 if len(labels) <= 12 else 20 if len(labels) <= 15 else 16 if len(labels) <= 20 else 14 if len(labels) <= 30 else 12
-                    fig = go.Figure(data=[go.Bar(
-                        x=labels, y=values_display, text=bar_text_labels, textposition="outside", textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
-                        hovertemplate="%{x}<br>%{text}<extra></extra>" if privacy else "%{x}<br>%{text}<br>%{y:,.2f}<extra></extra>"
-                    )])
-                    fig.update_layout(
-                        margin=dict(t=40, b=40, l=40, r=40), height=650, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        xaxis=dict(showgrid=False, tickfont=dict(size=16, color="#e2e8f0")), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy)
+                    # 使用快取，大幅降低隱私模式與分類切換時長條圖重建成本
+                    fig = _build_holdings_bar_fig(
+                        tuple(labels),
+                        tuple(values_display),
+                        tuple(bar_text_labels),
+                        tuple(bar_pie_colors),
+                        privacy,
+                        bar_font_size
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    fig = go.Figure(data=[go.Pie(
-                        labels=labels, values=values_abs, pull=[0.03]*len(labels), text=pie_text_labels, textinfo="text", textposition="auto",
-                        insidetextfont=dict(size=22, color="#ffffff"), outsidetextfont=dict(size=16, color="#e2e8f0"), 
-                        hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
-                        marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
-                    )])
-                    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
+                    # 使用快取，大幅降低隱私模式與分類切換時圓餅圖重建成本
+                    fig = _build_holdings_pie_fig(
+                        tuple(labels),
+                        tuple(values_abs),
+                        tuple(pie_text_labels),
+                        tuple(bar_pie_colors),
+                        privacy
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
         with col_nav:
