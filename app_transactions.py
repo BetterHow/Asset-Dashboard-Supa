@@ -272,7 +272,7 @@ def fmt(num, decimals=2):
     return f"{num:,.{decimals}f}"
 
 # ========================================================
-# 🚀 核心資料與數值預先計算區 (⚡極速向量化優化)
+# 🚀 核心資料與數值預先計算區
 # ========================================================
 display_currency = st.session_state.display_currency
 privacy = st.session_state.privacy_mode
@@ -281,6 +281,10 @@ unit = "NT&#36;" if display_currency == "TWD" else "US&#36;" if display_currency
 def convert(val, cur):
     u = val / usd_twd if cur == "TWD" else val
     return u * usd_twd if display_currency == "TWD" else u if display_currency == "USD" else u / btc_usd if btc_usd else u
+
+def get_val_in_cur(val, from_cur, to_cur):
+    u = val / usd_twd if from_cur == "TWD" else val * btc_usd if from_cur == "BTC" and btc_usd else val
+    return u * usd_twd if to_cur == "TWD" else u / btc_usd if to_cur == "BTC" and btc_usd else u
 
 holdings = calculate_holdings(st.session_state.transactions)
 for acc in st.session_state.cash_accounts:
@@ -299,42 +303,27 @@ if not df.empty:
     df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"])), axis=1)
     df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
     df["未實現損益"] = df["現值"] - df["總成本"]
-    
-    # ⚡ 向量化運算 (加速秘訣)
-    rates_to_twd = {"TWD": 1.0, "USD": usd_twd, "BTC": btc_usd * usd_twd if btc_usd else 1.0}
-    df["rate_to_twd"] = df["幣別"].map(rates_to_twd).fillna(1.0)
-    df["現值_TWD"] = df["現值"] * df["rate_to_twd"]
-    df["總成本_TWD"] = df["總成本"] * df["rate_to_twd"]
-    
-    disp_rate = 1.0 if display_currency == "TWD" else (1.0 / usd_twd) if display_currency == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
-    df["顯示現值"] = df["現值_TWD"] * disp_rate
-    df["顯示總成本"] = df["總成本_TWD"] * disp_rate
+    df["顯示現值"] = df.apply(lambda r: convert(r["現值"], r["幣別"]), axis=1)
+    df["顯示總成本"] = df.apply(lambda r: convert(r["總成本"], r["幣別"]), axis=1)
     df["顯示損益"] = df["顯示現值"] - df["顯示總成本"]
 
 tv = df["顯示現值"].sum() if not df.empty else 0.0
 tc = df["顯示總成本"].sum() if not df.empty else 0.0
-
-tl_twd = sum((l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd) for l in st.session_state.liabilities_accounts)
-disp_rate_glob = 1.0 if display_currency == "TWD" else (1.0 / usd_twd) if display_currency == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
-tl_disp = tl_twd * disp_rate_glob
-
+tl_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
+tl_disp = convert(tl_twd, "TWD")
 nv, nc = tv - tl_disp, tc - tl_disp
 n_pnl = nv - nc
 n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
 
 new_snap = {"version": "v2"}
 for d_cur in ["TWD", "USD", "BTC"]:
-    factor = 1.0 if d_cur == "TWD" else (1.0 / usd_twd) if d_cur == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
-    cv = (df["現值_TWD"].sum() * factor) if not df.empty else 0
-    cc = (df["總成本_TWD"].sum() * factor) if not df.empty else 0
-    cl = tl_twd * factor
-    
+    cv = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
+    cc = sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
+    cl = sum(get_val_in_cur(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
     cs = {}
     if not df.empty:
-        gp = df.groupby("類型")[["現值_TWD", "總成本_TWD"]].sum()
-        for cat, r in gp.iterrows():
-            cs[cat] = {"value": round(r["現值_TWD"] * factor, 2), "cost": round(r["總成本_TWD"] * factor, 2)}
-            
+        for cat, gp in df.groupby("類型"):
+            cs[cat] = {"value": round(sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2), "cost": round(sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2)}
     new_snap[d_cur] = {"value": round(cv, 2), "cost": round(cc, 2), "liability": round(cl, 2), "categories": cs}
 
 today_s = date.today().isoformat()
@@ -345,8 +334,6 @@ if today_s not in st.session_state.history_snapshots or st.session_state.history
 # ========================================================
 # 📊 UI 渲染區段開始
 # ========================================================
-st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
-
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -717,7 +704,8 @@ if not df.empty:
         cat_total_str = f"{unit.replace('$', '&#36;')} {cat_total_val:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {cat_total_val:,.3f}"
         st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(cat_total_str)}", unsafe_allow_html=True)
     else:
-        view_df = df_chart.groupby("名稱", as_index=False)["顯示現值"].sum()
+        # 🟢 修復：在全部視圖下，以「類型」作為分組彙整，而非各別「名稱」
+        view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
 
     if not view_df.empty:
         all_l = view_df["名稱"].tolist()
@@ -1169,7 +1157,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
 
 # ========================================================
-# 📝 交易紀錄管理
+# 📝 交易紀錄管理 (包含登錄日期與自訂排版)
 # ========================================================
 st.divider()
 st.subheader("交易紀錄管理")
