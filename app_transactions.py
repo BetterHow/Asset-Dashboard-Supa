@@ -14,7 +14,7 @@ from supabase import create_client, Client
 st.set_page_config(page_title="個人加密資產金庫", page_icon="🔐", layout="wide")
 
 # ========================================================
-# ⚡ 效能優化：局部渲染技術
+# ⚡ 效能優化：引入局部渲染技術
 # ========================================================
 if hasattr(st, "fragment"):
     st_fragment = st.fragment
@@ -334,6 +334,8 @@ if today_s not in st.session_state.history_snapshots or st.session_state.history
 # ========================================================
 # 📊 UI 渲染區段開始
 # ========================================================
+st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
+
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -675,14 +677,14 @@ render_cash_manager(unit, display_currency, btc_usd, usd_twd)
 render_liability_manager(unit, display_currency, tv, nv, btc_usd, usd_twd)
 
 # ========================================================
-# 📊 目前持倉配置 (補回圓餅圖與長條圖)
+# 📊 目前持倉配置 (圓餅圖與長條圖)
 # ========================================================
 if not df.empty:
     st.subheader("目前持倉配置")
     df_chart = df[df["數量"] != 0].copy()
     cats = df_chart.groupby("類型")[["顯示現值", "顯示損益", "顯示總成本"]].sum().reset_index().sort_values("顯示現值", ascending=False)
-    order = [c for c in cats['類型'] if c not in ['期貨', '現金']] + ([c for c in ['期貨', '現金'] if c in cats['類型'].values])
-    cats = cats.set_index('類型').loc[order].reset_index()
+    order_list = [c for c in cats['類型'] if c not in ['期貨', '現金']] + ([c for c in ['期貨', '現金'] if c in cats['類型'].values])
+    cats = cats.set_index('類型').loc[order_list].reset_index()
     
     n_cols = min(len(cats), 6)
     if n_cols > 0:
@@ -704,7 +706,7 @@ if not df.empty:
         cat_total_str = f"{unit.replace('$', '&#36;')} {cat_total_val:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {cat_total_val:,.3f}"
         st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(cat_total_str)}", unsafe_allow_html=True)
     else:
-        view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
+        view_df = df_chart.groupby("名稱", as_index=False)["顯示現值"].sum()
 
     if not view_df.empty:
         all_l = view_df["名稱"].tolist()
@@ -721,14 +723,14 @@ if not df.empty:
         items = list(view_df_sorted.iterrows())
         
         for i in range(0, len(items), n_cols_leg):
-            cols = st.columns(n_cols_leg)
+            cols_leg = st.columns(n_cols_leg)
             for j, (idx, row) in enumerate(items[i:i+n_cols_leg]):
                 lab, val = row["名稱"], row["顯示現值"]
                 pct = (abs(val) / view_total_abs * 100) if view_total_abs > 0 else 0
                 color = colors[list(view_df["名稱"]).index(lab) % len(colors)]
                 is_visible = lab in st.session_state.visible_items
                 
-                with cols[j]:
+                with cols_leg[j]:
                     label_text = f"{lab} | {pct:.1f}%" if is_visible else f"~~{lab}~~"
                     st.markdown(f"<div style='width:100%; height:6px; background-color:{color}; border-radius:4px; margin-bottom:-14px; position:relative; z-index:1;'></div>", unsafe_allow_html=True)
                     if st.button(label_text, key=f"leg_all_{lab}", use_container_width=True):
@@ -995,7 +997,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             else: st.dataframe(d_prem, use_container_width=True, hide_index=True, column_config=col_cfg)
 
 # ========================================================
-# ⚡ 局部渲染 Fragment: 個別標的分析 
+# ⚡ 局部渲染 Fragment: 個別標的分析 (補回所有互動與視覺化)
 # ========================================================
 @st_fragment
 def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
