@@ -14,7 +14,7 @@ from supabase import create_client, Client
 st.set_page_config(page_title="個人加密資產金庫", page_icon="🔐", layout="wide")
 
 # ========================================================
-# ⚡ 效能優化：引入局部渲染技術
+# ⚡ 效能優化：局部渲染技術
 # ========================================================
 if hasattr(st, "fragment"):
     st_fragment = st.fragment
@@ -272,8 +272,194 @@ def fmt(num, decimals=2):
     return f"{num:,.{decimals}f}"
 
 # ========================================================
-# 💳 UI: 現金與負債管理模組 (完整回歸)
+# 🚀 核心資料與數值預先計算區
 # ========================================================
+display_currency = st.session_state.display_currency
+privacy = st.session_state.privacy_mode
+unit = "NT&#36;" if display_currency == "TWD" else "US&#36;" if display_currency == "USD" else "BTC"
+
+def convert(val, cur):
+    u = val / usd_twd if cur == "TWD" else val
+    return u * usd_twd if display_currency == "TWD" else u if display_currency == "USD" else u / btc_usd if btc_usd else u
+
+def get_val_in_cur(val, from_cur, to_cur):
+    u = val / usd_twd if from_cur == "TWD" else val * btc_usd if from_cur == "BTC" and btc_usd else val
+    return u * usd_twd if to_cur == "TWD" else u / btc_usd if to_cur == "BTC" and btc_usd else u
+
+holdings = calculate_holdings(st.session_state.transactions)
+for acc in st.session_state.cash_accounts:
+    holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True})
+
+for h in holdings:
+    if h.get("is_cash"): h["總成本"], h["調整後成本"] = h["原始總成本"], 1.0
+    else:
+        eff = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] if st.session_state.get("include_premium", False) else h["原始總成本"]
+        h["總成本"], h["調整後成本"] = eff, (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"])/h["數量"] if abs(h["數量"])>0 else 0
+
+df = pd.DataFrame(holdings) if holdings else pd.DataFrame(columns=["名稱", "代號", "幣別", "類型", "數量", "原始總成本", "平均成本", "CC權利金", "SP權利金", "股息", "已實現損益", "歷史買進數量", "歷史賣出數量", "is_cash", "總成本", "調整後成本"])
+if not df.empty:
+    df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
+    cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and not r.get("is_cash"))))
+    df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"])), axis=1)
+    df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
+    df["未實現損益"] = df["現值"] - df["總成本"]
+    df["顯示現值"] = df.apply(lambda r: convert(r["現值"], r["幣別"]), axis=1)
+    df["顯示總成本"] = df.apply(lambda r: convert(r["總成本"], r["幣別"]), axis=1)
+    df["顯示損益"] = df["顯示現值"] - df["顯示總成本"]
+
+tv = df["顯示現值"].sum() if not df.empty else 0.0
+tc = df["顯示總成本"].sum() if not df.empty else 0.0
+tl_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
+tl_disp = convert(tl_twd, "TWD")
+nv, nc = tv - tl_disp, tc - tl_disp
+n_pnl = nv - nc
+n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
+
+new_snap = {"version": "v2"}
+for d_cur in ["TWD", "USD", "BTC"]:
+    cv = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
+    cc = sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
+    cl = sum(get_val_in_cur(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
+    cs = {}
+    if not df.empty:
+        for cat, gp in df.groupby("類型"):
+            cs[cat] = {"value": round(sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2), "cost": round(sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2)}
+    new_snap[d_cur] = {"value": round(cv, 2), "cost": round(cc, 2), "liability": round(cl, 2), "categories": cs}
+
+today_s = date.today().isoformat()
+if today_s not in st.session_state.history_snapshots or st.session_state.history_snapshots[today_s] != new_snap:
+    st.session_state.history_snapshots[today_s] = new_snap
+    save_data("history_snapshots", st.session_state.history_snapshots)
+
+# ========================================================
+# 📊 UI 渲染區段開始
+# ========================================================
+col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
+with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
+with col_select:
+    avail = [k for k in EXTRA_RATES.keys() if k not in st.session_state.selected_extras]
+    if avail:
+        ch = st.selectbox("新增匯率", ["+ 匯率"] + avail, label_visibility="collapsed", key="rate_sel")
+        if ch != "+ 匯率": st.session_state.selected_extras.append(ch); st.rerun()
+if st.session_state.selected_extras:
+    for n in st.session_state.selected_extras[:]:
+        r = get_rate(EXTRA_RATES[n])
+        c1, c2, _ = st.columns([1.2, 0.7, 3.1])
+        c1.markdown(f"**{n} {r:.3f}**" if r else f"**{n} N/A**")
+        if c2.button("×", key=f"rm_{n}"): st.session_state.selected_extras.remove(n); st.rerun()
+
+st.divider()
+
+# 側邊欄
+with st.sidebar:
+    st.title("📊 個人資產儀表板")
+    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
+    if st.button("登出金庫", use_container_width=True):
+        supabase.auth.sign_out()
+        st.session_state.user, st.session_state.password = None, None
+        st.cache_data.clear(); st.rerun()
+    st.divider()
+    
+    st.header("新增交易")
+    if st.session_state.clear_form:
+        for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: st.session_state[k] = ""
+        st.session_state.clear_form = False
+
+    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
+    REV_MAP = {v:k for k,v in TW_MAP.items()}
+
+    cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
+    if cn != st.session_state.get("prev_name_input", ""):
+        cln = cn.strip()
+        at = TW_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
+        if at: st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
+        st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
+    elif ct != st.session_state.get("prev_ticker_input", ""):
+        clt = ct.strip().upper()
+        if clt in REV_MAP: st.session_state["name_input"] = REV_MAP[clt]
+        st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
+
+    action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
+    name = st.text_input("資產名稱", key="name_input")
+    ticker = st.text_input("代號", key="ticker_input")
+    tv_str = str(ticker).strip().upper()
+    
+    if tv_str != st.session_state.prev_ticker:
+        clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
+        st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
+        st.session_state.prev_ticker = tv_str
+        st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+
+    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
+    if asset_type != st.session_state.prev_type:
+        st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
+        st.session_state.prev_type = asset_type
+
+    currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
+    qty_str = st.text_input("數量", placeholder="SP/CC/配息 可為 0", key="qty_input")
+    price_str = st.text_input(f"價格（{currency}）", placeholder="留白自動抓價", key="price_input")
+    tr_date = st.date_input("交易日期", value=date.today())
+    note = st.text_input("備註", key="note_input")
+
+    if st.button("儲存", type="primary", use_container_width=True):
+        q, p = safe_float(qty_str), safe_float(price_str)
+        if p is None and ticker and len(str(ticker).strip())>=2: p = get_latest_price(str(ticker))
+        is_prem = action in ["Sell Put", "Covered Call", "配息"]
+        vq, vp = (q is not None and q>=0) if is_prem else (q is not None and q>0), (p is not None) if is_prem else (p is not None and p>=0)
+        
+        if name and vq and vp:
+            st.session_state.transactions.append({
+                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "date": tr_date.strftime("%Y-%m-%d"), "type": action, "name": name, "ticker": str(ticker).strip().upper(), "type_category": asset_type, "currency": currency, "quantity": q, "price": p, "fee": 0, "note": note, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            st.session_state.clear_form = True
+            save_data("transactions", st.session_state.transactions)
+            fetch_all_prices.clear(); st.rerun()
+        else: st.warning("請正確填寫數量與價格。")
+
+c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
+with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
+with c_tg:
+    if st.button("顯示金額" if privacy else "隱藏金額", use_container_width=True):
+        st.session_state.privacy_mode = not privacy; st.rerun()
+with c_r:
+    if st.button("重新整理", use_container_width=True): st.cache_data.clear(); st.rerun()
+        
+with c_tdc:
+    hds = sorted([d for d in st.session_state.history_snapshots.keys() if d < today_s])
+    pnv = nv
+    if hds:
+        pd_data = st.session_state.history_snapshots[hds[-1]]
+        if isinstance(pd_data, dict) and pd_data.get("version") == "v2":
+            pnv = pd_data.get(display_currency, pd_data.get("TWD")).get("value", 0) - pd_data.get(display_currency, pd_data.get("TWD")).get("liability", 0)
+        else:
+            v, l = pd_data.get("value", 0) if isinstance(pd_data, dict) else pd_data, pd_data.get("liability", 0) if isinstance(pd_data, dict) else 0
+            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+            pnv = (v - l) / div
+    
+    tc_val = nv - pnv
+    tc_pct_str = "∞%" if abs(pnv)<1e-5 and tc_val>0 else "0.00%" if abs(pnv)<1e-5 and tc_val<=0 else f"{(tc_val/abs(pnv)*100):.2f}%"
+    su = unit.replace('$', '&#36;')
+    if privacy: st.markdown("<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
+    else:
+        color = "#4ade80" if tc_val>0 else "#ef4444" if tc_val<0 else "#94a3b8"
+        sign = "+" if tc_val>0 else ""
+        def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
+        vs = f"{sign}{su} {format_cv_val(abs(tc_val), display_currency)}"
+        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{color};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
+
+opts = ["TWD", "USD", "BTC"]
+idx = opts.index(display_currency) if display_currency in opts else 0
+nc = st.radio("顯示幣別", opts, horizontal=True, index=idx)
+if nc != display_currency: st.session_state.display_currency = nc; st.rerun()
+st.checkbox("損益含權利金/配息", key="include_premium")
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("淨資產現值", mask_val(f"{unit.replace('&#36;', '$')} {nv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {nv:,.3f}"))
+m2.metric("總資產現值", mask_val(f"{unit.replace('&#36;', '$')} {tv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tv:,.3f}"))
+m3.metric("負債總額", mask_val(f"{unit.replace('&#36;', '$')} {tl_disp:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tl_disp:,.3f}"))
+m4.metric("未實現損益", mask_val(f"{unit.replace('&#36;', '$')} {n_pnl:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {n_pnl:,.3f}"), delta=f"{n_pnl_pct:.1f}%")
+
 def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
     with st.expander("💵 現金總覽", expanded=False):
         cash_total_display = 0
@@ -485,198 +671,12 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     st.plotly_chart(fig_lib, use_container_width=True)
         else: st.caption("目前無負債紀錄。")
 
-# ========================================================
-# 🚀 核心資料與數值預先計算區
-# ========================================================
-display_currency = st.session_state.display_currency
-privacy = st.session_state.privacy_mode
-unit = "NT&#36;" if display_currency == "TWD" else "US&#36;" if display_currency == "USD" else "BTC"
-
-def convert(val, cur):
-    u = val / usd_twd if cur == "TWD" else val
-    return u * usd_twd if display_currency == "TWD" else u if display_currency == "USD" else u / btc_usd if btc_usd else u
-
-def get_val_in_cur(val, from_cur, to_cur):
-    u = val / usd_twd if from_cur == "TWD" else val * btc_usd if from_cur == "BTC" and btc_usd else val
-    return u * usd_twd if to_cur == "TWD" else u / btc_usd if to_cur == "BTC" and btc_usd else u
-
-holdings = calculate_holdings(st.session_state.transactions)
-for acc in st.session_state.cash_accounts:
-    holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True})
-
-for h in holdings:
-    if h.get("is_cash"): h["總成本"], h["調整後成本"] = h["原始總成本"], 1.0
-    else:
-        eff = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] if st.session_state.get("include_premium", False) else h["原始總成本"]
-        h["總成本"], h["調整後成本"] = eff, (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"])/h["數量"] if abs(h["數量"])>0 else 0
-
-df = pd.DataFrame(holdings) if holdings else pd.DataFrame(columns=["名稱", "代號", "幣別", "類型", "數量", "原始總成本", "平均成本", "CC權利金", "SP權利金", "股息", "已實現損益", "歷史買進數量", "歷史賣出數量", "is_cash", "總成本", "調整後成本"])
-if not df.empty:
-    df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
-    cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and not r.get("is_cash"))))
-    df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"])), axis=1)
-    df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
-    df["未實現損益"] = df["現值"] - df["總成本"]
-    df["顯示現值"] = df.apply(lambda r: convert(r["現值"], r["幣別"]), axis=1)
-    df["顯示總成本"] = df.apply(lambda r: convert(r["總成本"], r["幣別"]), axis=1)
-    df["顯示損益"] = df["顯示現值"] - df["顯示總成本"]
-
-tv = df["顯示現值"].sum() if not df.empty else 0.0
-tc = df["顯示總成本"].sum() if not df.empty else 0.0
-tl_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
-tl_disp = convert(tl_twd, "TWD")
-nv, nc = tv - tl_disp, tc - tl_disp
-n_pnl = nv - nc
-n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
-
-new_snap = {"version": "v2"}
-for d_cur in ["TWD", "USD", "BTC"]:
-    cv = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
-    cc = sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
-    cl = sum(get_val_in_cur(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
-    cs = {}
-    if not df.empty:
-        for cat, gp in df.groupby("類型"):
-            cs[cat] = {"value": round(sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2), "cost": round(sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2)}
-    new_snap[d_cur] = {"value": round(cv, 2), "cost": round(cc, 2), "liability": round(cl, 2), "categories": cs}
-
-today_s = date.today().isoformat()
-if today_s not in st.session_state.history_snapshots or st.session_state.history_snapshots[today_s] != new_snap:
-    st.session_state.history_snapshots[today_s] = new_snap
-    save_data("history_snapshots", st.session_state.history_snapshots)
-
-# ========================================================
-# 📊 UI 渲染區段開始
-# ========================================================
-col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
-with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
-with col_select:
-    avail = [k for k in EXTRA_RATES.keys() if k not in st.session_state.selected_extras]
-    if avail:
-        ch = st.selectbox("新增匯率", ["+ 匯率"] + avail, label_visibility="collapsed", key="rate_sel")
-        if ch != "+ 匯率": st.session_state.selected_extras.append(ch); st.rerun()
-if st.session_state.selected_extras:
-    for n in st.session_state.selected_extras[:]:
-        r = get_rate(EXTRA_RATES[n])
-        c1, c2, _ = st.columns([1.2, 0.7, 3.1])
-        c1.markdown(f"**{n} {r:.3f}**" if r else f"**{n} N/A**")
-        if c2.button("×", key=f"rm_{n}"): st.session_state.selected_extras.remove(n); st.rerun()
-
-st.divider()
-
-# 側邊欄
-with st.sidebar:
-    st.title("📊 個人資產儀表板")
-    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
-    if st.button("登出金庫", use_container_width=True):
-        supabase.auth.sign_out()
-        st.session_state.user, st.session_state.password = None, None
-        st.cache_data.clear(); st.rerun()
-    st.divider()
-    
-    st.header("新增交易")
-    if st.session_state.clear_form:
-        for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: st.session_state[k] = ""
-        st.session_state.clear_form = False
-
-    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
-    REV_MAP = {v:k for k,v in TW_MAP.items()}
-
-    cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
-    if cn != st.session_state.get("prev_name_input", ""):
-        cln = cn.strip()
-        at = TW_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
-        if at: st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
-        st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
-    elif ct != st.session_state.get("prev_ticker_input", ""):
-        clt = ct.strip().upper()
-        if clt in REV_MAP: st.session_state["name_input"] = REV_MAP[clt]
-        st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
-
-    action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
-    name = st.text_input("資產名稱", key="name_input")
-    ticker = st.text_input("代號", key="ticker_input")
-    tv_str = str(ticker).strip().upper()
-    
-    if tv_str != st.session_state.prev_ticker:
-        clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
-        st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_ticker = tv_str
-        st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
-
-    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
-    if asset_type != st.session_state.prev_type:
-        st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_type = asset_type
-
-    currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
-    qty_str = st.text_input("數量", placeholder="SP/CC/配息 可為 0", key="qty_input")
-    price_str = st.text_input(f"價格（{currency}）", placeholder="留白自動抓價", key="price_input")
-    tr_date = st.date_input("交易日期", value=date.today())
-    note = st.text_input("備註", key="note_input")
-
-    if st.button("儲存", type="primary", use_container_width=True):
-        q, p = safe_float(qty_str), safe_float(price_str)
-        if p is None and ticker and len(str(ticker).strip())>=2: p = get_latest_price(str(ticker))
-        is_prem = action in ["Sell Put", "Covered Call", "配息"]
-        vq, vp = (q is not None and q>=0) if is_prem else (q is not None and q>0), (p is not None) if is_prem else (p is not None and p>=0)
-        
-        if name and vq and vp:
-            st.session_state.transactions.append({
-                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), "date": tr_date.strftime("%Y-%m-%d"), "type": action, "name": name, "ticker": str(ticker).strip().upper(), "type_category": asset_type, "currency": currency, "quantity": q, "price": p, "fee": 0, "note": note, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-            st.session_state.clear_form = True
-            save_data("transactions", st.session_state.transactions)
-            fetch_all_prices.clear(); st.rerun()
-        else: st.warning("請正確填寫數量與價格。")
-
-c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
-with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
-with c_tg:
-    if st.button("顯示金額" if privacy else "隱藏金額", use_container_width=True):
-        st.session_state.privacy_mode = not privacy; st.rerun()
-with c_r:
-    if st.button("重新整理", use_container_width=True): st.cache_data.clear(); st.rerun()
-        
-with c_tdc:
-    hds = sorted([d for d in st.session_state.history_snapshots.keys() if d < today_s])
-    pnv = nv
-    if hds:
-        pd_data = st.session_state.history_snapshots[hds[-1]]
-        if isinstance(pd_data, dict) and pd_data.get("version") == "v2":
-            pnv = pd_data.get(display_currency, pd_data.get("TWD")).get("value", 0) - pd_data.get(display_currency, pd_data.get("TWD")).get("liability", 0)
-        else:
-            v, l = pd_data.get("value", 0) if isinstance(pd_data, dict) else pd_data, pd_data.get("liability", 0) if isinstance(pd_data, dict) else 0
-            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
-            pnv = (v - l) / div
-    
-    tc_val = nv - pnv
-    tc_pct_str = "∞%" if abs(pnv)<1e-5 and tc_val>0 else "0.00%" if abs(pnv)<1e-5 and tc_val<=0 else f"{(tc_val/abs(pnv)*100):.2f}%"
-    su = unit.replace('$', '&#36;')
-    if privacy: st.markdown("<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
-    else:
-        color = "#4ade80" if tc_val>0 else "#ef4444" if tc_val<0 else "#94a3b8"
-        sign = "+" if tc_val>0 else ""
-        def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
-        vs = f"{sign}{su} {format_cv_val(abs(tc_val), display_currency)}"
-        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{color};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
-
-opts = ["TWD", "USD", "BTC"]
-idx = opts.index(display_currency) if display_currency in opts else 0
-nc = st.radio("顯示幣別", opts, horizontal=True, index=idx)
-if nc != display_currency: st.session_state.display_currency = nc; st.rerun()
-st.checkbox("損益含權利金/配息", key="include_premium")
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("淨資產現值", mask_val(f"{unit.replace('&#36;', '$')} {nv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {nv:,.3f}"))
-m2.metric("總資產現值", mask_val(f"{unit.replace('&#36;', '$')} {tv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tv:,.3f}"))
-m3.metric("負債總額", mask_val(f"{unit.replace('&#36;', '$')} {tl_disp:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tl_disp:,.3f}"))
-m4.metric("未實現損益", mask_val(f"{unit.replace('&#36;', '$')} {n_pnl:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {n_pnl:,.3f}"), delta=f"{n_pnl_pct:.1f}%")
-
 render_cash_manager(unit, display_currency, btc_usd, usd_twd)
 render_liability_manager(unit, display_currency, tv, nv, btc_usd, usd_twd)
 
+# ========================================================
+# 📊 目前持倉配置 (補回圓餅圖與長條圖)
+# ========================================================
 if not df.empty:
     st.subheader("目前持倉配置")
     df_chart = df[df["數量"] != 0].copy()
@@ -692,18 +692,116 @@ if not df.empty:
             pct = "∞%" if abs(cst)<=1e-5 and p>0 else "0.0%" if abs(cst)<=1e-5 and p<=0 else f"{abs(p/abs(cst)*100):.1f}%"
             sgn = "+" if p>0 else "-" if p<0 else ""
             clr = "#ef4444" if p<0 else "#4ade80"
-            amt_s = mask_val(f"{unit.replace('$', '&#36;')} {a:,.0f}")
-            pnl_s = mask_val(f"{unit.replace('$', '&#36;')} {abs(p):,.0f}")
+            amt_s = mask_val(f"{unit.replace('$', '&#36;')} {a:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {a:,.3f}")
+            pnl_s = mask_val(f"{unit.replace('$', '&#36;')} {abs(p):,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {abs(p):,.3f}")
             pd_ui = f"<div style='font-size:16px; font-weight:600; color:{clr}; margin-top:4px;'>({sgn}{pnl_s} ｜ {sgn}{pct})</div>" if c != "現金" else "<div style='font-size:16px; margin-top:4px; visibility:hidden;'>-</div>"
             cs[i % n_cols].markdown(f"<div style='padding: 5px 0 15px 0;'><div style='font-size:18px; font-weight:600; color:#e2e8f0'>{c}：{amt_s}</div>{pd_ui}</div>", unsafe_allow_html=True)
 
-    view_df = df_chart.groupby("名稱", as_index=False)["顯示現值"].sum()
+    is_category_view = st.session_state.selected_category is not None
+    if is_category_view:
+        view_df = df_chart[df_chart["類型"] == st.session_state.selected_category].copy()
+        cat_total_val = view_df['顯示現值'].sum()
+        cat_total_str = f"{unit.replace('$', '&#36;')} {cat_total_val:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {cat_total_val:,.3f}"
+        st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(cat_total_str)}", unsafe_allow_html=True)
+    else:
+        view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
+
     if not view_df.empty:
         all_l = view_df["名稱"].tolist()
         if not st.session_state.visible_items or not st.session_state.visible_items.intersection(set(all_l)): st.session_state.visible_items = set(all_l)
 
+        plot_df = view_df[view_df["名稱"].isin(st.session_state.visible_items)].copy().sort_values(by="顯示現值", ascending=False).reset_index(drop=True)
+        view_total_abs = view_df["顯示現值"].abs().sum()
+        plot_total_abs = plot_df["顯示現值"].abs().sum()
+        colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
+
+        st.markdown("**圖例**（點擊可顯示/隱藏）")
+        n_cols_leg = 7
+        view_df_sorted = view_df.sort_values("顯示現值", ascending=False).reset_index(drop=True)
+        items = list(view_df_sorted.iterrows())
+        
+        for i in range(0, len(items), n_cols_leg):
+            cols = st.columns(n_cols_leg)
+            for j, (idx, row) in enumerate(items[i:i+n_cols_leg]):
+                lab, val = row["名稱"], row["顯示現值"]
+                pct = (abs(val) / view_total_abs * 100) if view_total_abs > 0 else 0
+                color = colors[list(view_df["名稱"]).index(lab) % len(colors)]
+                is_visible = lab in st.session_state.visible_items
+                
+                with cols[j]:
+                    label_text = f"{lab} | {pct:.1f}%" if is_visible else f"~~{lab}~~"
+                    st.markdown(f"<div style='width:100%; height:6px; background-color:{color}; border-radius:4px; margin-bottom:-14px; position:relative; z-index:1;'></div>", unsafe_allow_html=True)
+                    if st.button(label_text, key=f"leg_all_{lab}", use_container_width=True):
+                        st.session_state.visible_items.discard(lab) if is_visible else st.session_state.visible_items.add(lab)
+                        st.rerun()
+
+        col_pie, col_nav = st.columns([0.88, 0.12])
+        
+        with col_pie:
+            try:
+                with st.popover("⚙️ 圖表設定"):
+                    chart_type_choice = st.selectbox("圖表類型", ["自動 (預設)", "圓餅圖", "長條圖"], index=0, key="chart_type_select")
+                    threshold = st.slider("合併佔比小於多少為「其他」？", 0.0, 5.0, 1.0, 0.5, "%.1f%%")
+            except AttributeError:
+                chart_type_choice = st.selectbox("圖表類型", ["自動 (預設)", "圓餅圖", "長條圖"], index=0, key="chart_type_select")
+                threshold = st.slider("合併佔比小於多少為「其他」？", 0.0, 5.0, 1.0, 0.5, "%.1f%%")
+
+            if plot_df.empty: st.info("請至少選擇一個項目")
+            else:
+                if threshold > 0 and plot_total_abs > 0:
+                    mask = (plot_df["顯示現值"].abs() / plot_total_abs * 100) < threshold
+                    small_df, large_df = plot_df[mask], plot_df[~mask]
+                    if not small_df.empty:
+                        plot_df = pd.concat([large_df, pd.DataFrame([{"名稱": f"其他小部位 ({len(small_df)} 檔)", "顯示現值": small_df["顯示現值"].sum()}])], ignore_index=True)
+                
+                labels = plot_df["名稱"].tolist()
+                values_display = plot_df["顯示現值"].tolist()
+                values_abs = plot_df["顯示現值"].abs().tolist()
+                bar_pie_colors = ["#808080" if lab.startswith("其他小部位") else colors[list(view_df["名稱"]).index(lab) % len(colors)] for lab in labels]
+                
+                pie_text_labels, bar_text_labels = [], []
+                for lab, val in zip(labels, values_display):
+                    abs_val = abs(val)
+                    pct_in_view = (abs_val / plot_total_abs * 100) if plot_total_abs > 0 else 0
+                    pct_of_total = (abs_val / view_total_abs * 100) if view_total_abs > 0 else 0
+                    bar_text_labels.append(f"<b>{pct_in_view:.1f}%<br>({pct_of_total:.1f}%)</b>" if is_category_view else f"<b>{pct_in_view:.1f}%</b>")
+                    pie_text_labels.append(f"<b>{lab}</b><br>{pct_in_view:.1f}%<br>({pct_of_total:.1f}%)" if pct_in_view >= 1.0 and is_category_view else f"<b>{lab}</b><br>{pct_in_view:.1f}%" if pct_in_view >= 1.0 else "")
+                
+                show_bar_chart = (chart_type_choice == "長條圖") or (chart_type_choice == "自動 (預設)" and len(labels) > 10)
+
+                if show_bar_chart:
+                    bar_font_size = 24 if len(labels) <= 12 else 20 if len(labels) <= 15 else 16 if len(labels) <= 20 else 14 if len(labels) <= 30 else 12
+                    fig = go.Figure(data=[go.Bar(
+                        x=labels, y=values_display, text=bar_text_labels, textposition="outside", textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
+                        hovertemplate="%{x}<br>%{text}<extra></extra>" if privacy else "%{x}<br>%{text}<br>%{y:,.2f}<extra></extra>"
+                    )])
+                    fig.update_layout(
+                        margin=dict(t=40, b=40, l=40, r=40), height=650, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(showgrid=False, tickfont=dict(size=16, color="#e2e8f0")), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    fig = go.Figure(data=[go.Pie(
+                        labels=labels, values=values_abs, pull=[0.03]*len(labels), text=pie_text_labels, textinfo="text", textposition="auto",
+                        insidetextfont=dict(size=22, color="#ffffff"), outsidetextfont=dict(size=16, color="#e2e8f0"), 
+                        hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
+                        marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
+                    )])
+                    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
+                    st.plotly_chart(fig, use_container_width=True)
+
+        with col_nav:
+            st.markdown("<div style='margin-top: 60px;'></div>", unsafe_allow_html=True)
+            st.caption("切換分類檢視：")
+            for cat in ["全部"] + order_list:
+                if st.button(cat, use_container_width=True, key=f"nav_cat_{cat}", type="primary" if ((cat == st.session_state.selected_category) or (cat == "全部" and st.session_state.selected_category is None)) else "secondary"):
+                    st.session_state.selected_category = None if cat == "全部" else cat
+                    st.session_state.visible_items = set()
+                    st.rerun()
+
 # ========================================================
-# ⚡ 局部渲染 Fragment: 趨勢圖 (補回互動設定與面積填色)
+# ⚡ 局部渲染 Fragment: 趨勢圖 
 # ========================================================
 @st_fragment
 def render_overall_trend_section(history_snapshots, selected_cat, display_currency, usd_twd, btc_usd, unit, privacy):
@@ -897,7 +995,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             else: st.dataframe(d_prem, use_container_width=True, hide_index=True, column_config=col_cfg)
 
 # ========================================================
-# ⚡ 局部渲染 Fragment: 個別標的分析 (補回所有互動與視覺化)
+# ⚡ 局部渲染 Fragment: 個別標的分析 
 # ========================================================
 @st_fragment
 def render_individual_analysis(transactions, privacy, display_currency, usd_twd, btc_usd):
@@ -1055,7 +1153,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
 
 # ========================================================
-# 📝 交易紀錄管理 (包含登錄日期與自訂排版)
+# 📝 交易紀錄管理
 # ========================================================
 st.divider()
 st.subheader("交易紀錄管理")
@@ -1121,7 +1219,7 @@ if st.session_state.transactions:
                         st.rerun()
             else:
                 c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
-                if privacy:
+                if st.session_state.privacy_mode:
                     qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
                 else:
                     qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
