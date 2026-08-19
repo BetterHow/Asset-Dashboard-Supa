@@ -170,6 +170,140 @@ def fetch_all_prices(tickers: tuple):
     return results
 
 # ========================================================
+# ⚡ 效能優化：Plotly 圖表建構快取
+# ========================================================
+@st.cache_data(show_spinner=False)
+def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
+    fig = go.Figure()
+    hover_temp = "%{x|%Y-%m-%d}<br>" + unit_str + " %{y:,.0f}<extra></extra>" if not privacy else "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
+    fig.add_trace(go.Scatter(
+        x=dates, y=values, mode='lines', name='現金總額',
+        line=dict(color='#00CC96', width=3, shape='linear'),
+        fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp
+    ))
+    if dates:
+        today_dt = pd.to_datetime(date.today())
+        start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
+        fig.update_layout(
+            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
+            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
+            hovermode="x unified", dragmode="pan"
+        )
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _build_pie_fig(labels, values, colors, unit_str, privacy: bool, height=300):
+    hover = "%{label}<br>%{percent}<br>" + unit_str + " %{value:,.0f}<extra></extra>" if not privacy else "%{label}<br>%{percent}<extra></extra>"
+    fig = go.Figure(data=[go.Pie(
+        labels=labels, values=values, pull=[0.03]*len(labels),
+        textinfo="label+percent", textfont=dict(size=14, color="#ffffff"),
+        marker=dict(colors=colors, line=dict(color="#111111", width=1.5)),
+        sort=False, hovertemplate=hover
+    )])
+    fig.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=height, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
+    fig = go.Figure()
+    hover_temp = "%{x|%Y-%m-%d}<br>" + unit_str + " %{y:,.0f}<extra></extra>" if not privacy else "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
+    fig.add_trace(go.Scatter(
+        x=dates, y=values, mode='lines', name='負債總額',
+        line=dict(color='#EF553B', width=3, shape='linear'),
+        fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp
+    ))
+    if dates:
+        today_dt = pd.to_datetime(date.today())
+        start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
+        fig.update_layout(
+            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
+            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
+            hovermode="x unified", dragmode="pan"
+        )
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts, unit_str, privacy: bool, val_name: str):
+    fdf_dates = pd.to_datetime(dates)
+    fdf_value, fdf_cost = list(values), list(costs)
+    value_gain = [max(v, c) for v, c in zip(fdf_value, fdf_cost)]
+    value_loss = [min(v, c) for v, c in zip(fdf_value, fdf_cost)]
+    y_max, y_min = max(max(fdf_value or [0]), max(fdf_cost or [0])), min(min(fdf_value or [0]), min(fdf_cost or [0]))
+    y_range = y_max - y_min if y_max != y_min else 1.0
+    pnl_y = [min(v, c) - (y_range * 0.005) for v, c in zip(fdf_value, fdf_cost)]
+    pct_y = [min(v, c) - (y_range * 0.010) for v, c in zip(fdf_value, fdf_cost)]
+
+    fig = go.Figure()
+    if privacy:
+        hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
+        hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
+        hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
+        hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
+    else:
+        hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
+        hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
+        hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
+        hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
+
+    fig.add_trace(go.Scatter(x=fdf_dates, y=pct_y, mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=pnl_pct_texts if not privacy else None, hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=pnl_y, mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=pnl_val_texts if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', name='成本', line=dict(color='#3b82f6', width=3), hovertemplate=hover_temp_cost))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_value, mode='lines', name=val_name, line=dict(color='#00CC96', width=3), hovertemplate=hover_temp_val))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
+    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _build_holdings_bar_fig(labels, values_display, bar_text_labels, bar_pie_colors, privacy: bool, bar_font_size: int):
+    fig = go.Figure(data=[go.Bar(
+        x=labels, y=values_display, text=bar_text_labels, textposition="outside",
+        textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
+        hovertemplate="%{x}<br>%{text}<extra></extra>" if privacy else "%{x}<br>%{text}<br>%{y:,.2f}<extra></extra>"
+    )])
+    fig.update_layout(
+        margin=dict(t=40, b=40, l=40, r=40), height=650, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, tickfont=dict(size=16, color="#e2e8f0")), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy)
+    )
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _build_holdings_pie_fig(labels, values_abs, pie_text_labels, bar_pie_colors, privacy: bool):
+    fig = go.Figure(data=[go.Pie(
+        labels=labels, values=values_abs, pull=[0.03]*len(labels), text=pie_text_labels, textinfo="text", textposition="auto",
+        insidetextfont=dict(size=22, color="#ffffff"), outsidetextfont=dict(size=16, color="#e2e8f0"),
+        hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
+        marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
+    )])
+    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _prepare_trend_hist_data(history_json: str, selected_cat, display_currency: str):
+    try: history_snapshots = json.loads(history_json)
+    except: return []
+    hist_d = []
+    for d_str, v in history_snapshots.items():
+        if isinstance(v, dict) and v.get("version") == "v2":
+            d_data = v.get(display_currency, v.get("TWD"))
+            val, cost, liab = d_data.get("value", 0), d_data.get("cost", 0), d_data.get("liability", 0.0)
+            if selected_cat is None: vc, cc = val - liab, cost - liab
+            else:
+                cat_data = d_data.get("categories", {}).get(selected_cat, {})
+                vc, cc = cat_data.get("value", 0), cat_data.get("cost", 0)
+            hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
+        else:
+            val = v.get("value", 0) if isinstance(v, dict) else 0
+            liab = v.get("liability", 0) if isinstance(v, dict) else 0
+            hist_d.append({'Date': d_str, 'Value': val - liab, 'Cost': 0})
+    return hist_d
+
+# ========================================================
 # 🚀 做空與多頭會計核心引擎
 # ========================================================
 def calculate_holdings(transactions):
@@ -180,10 +314,7 @@ def calculate_holdings(transactions):
         if key not in holdings:
             holdings[key] = {"名稱": t.get("name", key), "代號": t.get("ticker", ""), "幣別": t.get("currency", "TWD"), "類型": t.get("type_category", "其他"), "數量": 0.0, "avg_cost": 0.0, "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0}
         
-        h = holdings[key]
-        qty = float(t.get("quantity", 0))
-        price = float(t.get("price", 0))
-        action = t["type"]
+        h, qty, price, action = holdings[key], float(t.get("quantity", 0)), float(t.get("price", 0)), t["type"]
         
         if action in ["Sell Put", "Covered Call", "配息"]:
             amount = price if qty == 0 else qty * price
@@ -272,7 +403,7 @@ def fmt(num, decimals=2):
     return f"{num:,.{decimals}f}"
 
 # ========================================================
-# 🚀 核心資料與數值預先計算區
+# 🚀 核心資料與數值預先計算區 (⚡極速向量化優化)
 # ========================================================
 display_currency = st.session_state.display_currency
 privacy = st.session_state.privacy_mode
@@ -281,10 +412,6 @@ unit = "NT&#36;" if display_currency == "TWD" else "US&#36;" if display_currency
 def convert(val, cur):
     u = val / usd_twd if cur == "TWD" else val
     return u * usd_twd if display_currency == "TWD" else u if display_currency == "USD" else u / btc_usd if btc_usd else u
-
-def get_val_in_cur(val, from_cur, to_cur):
-    u = val / usd_twd if from_cur == "TWD" else val * btc_usd if from_cur == "BTC" and btc_usd else val
-    return u * usd_twd if to_cur == "TWD" else u / btc_usd if to_cur == "BTC" and btc_usd else u
 
 holdings = calculate_holdings(st.session_state.transactions)
 for acc in st.session_state.cash_accounts:
@@ -303,27 +430,41 @@ if not df.empty:
     df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"])), axis=1)
     df["現值"] = df.apply(lambda r: r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"], axis=1)
     df["未實現損益"] = df["現值"] - df["總成本"]
-    df["顯示現值"] = df.apply(lambda r: convert(r["現值"], r["幣別"]), axis=1)
-    df["顯示總成本"] = df.apply(lambda r: convert(r["總成本"], r["幣別"]), axis=1)
+    
+    rates_to_twd = {"TWD": 1.0, "USD": usd_twd, "BTC": btc_usd * usd_twd if btc_usd else 1.0}
+    df["rate_to_twd"] = df["幣別"].map(rates_to_twd).fillna(1.0)
+    df["現值_TWD"] = df["現值"] * df["rate_to_twd"]
+    df["總成本_TWD"] = df["總成本"] * df["rate_to_twd"]
+    
+    disp_rate = 1.0 if display_currency == "TWD" else (1.0 / usd_twd) if display_currency == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
+    df["顯示現值"] = df["現值_TWD"] * disp_rate
+    df["顯示總成本"] = df["總成本_TWD"] * disp_rate
     df["顯示損益"] = df["顯示現值"] - df["顯示總成本"]
 
 tv = df["顯示現值"].sum() if not df.empty else 0.0
 tc = df["顯示總成本"].sum() if not df.empty else 0.0
-tl_twd = sum(l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd for l in st.session_state.liabilities_accounts)
-tl_disp = convert(tl_twd, "TWD")
+
+tl_twd = sum((l["balance"] if l["currency"] == "TWD" else l["balance"] * usd_twd) for l in st.session_state.liabilities_accounts)
+disp_rate_glob = 1.0 if display_currency == "TWD" else (1.0 / usd_twd) if display_currency == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
+tl_disp = tl_twd * disp_rate_glob
+
 nv, nc = tv - tl_disp, tc - tl_disp
 n_pnl = nv - nc
 n_pnl_pct = (n_pnl / abs(nc) * 100) if abs(nc) > 0 else 0
 
 new_snap = {"version": "v2"}
 for d_cur in ["TWD", "USD", "BTC"]:
-    cv = sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
-    cc = sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in df.iterrows()) if not df.empty else 0
-    cl = sum(get_val_in_cur(l["balance"], l["currency"], d_cur) for l in st.session_state.liabilities_accounts)
+    factor = 1.0 if d_cur == "TWD" else (1.0 / usd_twd) if d_cur == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
+    cv = (df["現值_TWD"].sum() * factor) if not df.empty else 0
+    cc = (df["總成本_TWD"].sum() * factor) if not df.empty else 0
+    cl = tl_twd * factor
+    
     cs = {}
     if not df.empty:
-        for cat, gp in df.groupby("類型"):
-            cs[cat] = {"value": round(sum(get_val_in_cur(r["現值"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2), "cost": round(sum(get_val_in_cur(r["總成本"], r["幣別"], d_cur) for _, r in gp.iterrows()), 2)}
+        gp = df.groupby("類型")[["現值_TWD", "總成本_TWD"]].sum()
+        for cat, r in gp.iterrows():
+            cs[cat] = {"value": round(r["現值_TWD"] * factor, 2), "cost": round(r["總成本_TWD"] * factor, 2)}
+            
     new_snap[d_cur] = {"value": round(cv, 2), "cost": round(cc, 2), "liability": round(cl, 2), "categories": cs}
 
 today_s = date.today().isoformat()
@@ -334,6 +475,8 @@ if today_s not in st.session_state.history_snapshots or st.session_state.history
 # ========================================================
 # 📊 UI 渲染區段開始
 # ========================================================
+st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
+
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -361,42 +504,87 @@ with st.sidebar:
     st.divider()
     
     st.header("新增交易")
+    
+    # 🟢 新增：提取現有持倉清單以供快速選擇
+    existing_assets = {}
+    for t in st.session_state.transactions:
+        tk = t.get("ticker", "").strip().upper()
+        nm = t.get("name", "").strip()
+        if nm or tk:
+            label = f"{nm} ({tk})" if tk else nm
+            if label not in existing_assets:
+                existing_assets[label] = {
+                    "name": nm,
+                    "ticker": tk,
+                    "type": t.get("type_category", "其他"),
+                    "currency": t.get("currency", "TWD")
+                }
+    asset_options = ["➕ 新增全新標的..."] + sorted(list(existing_assets.keys()))
+    
+    if "fast_asset_selector" not in st.session_state:
+        st.session_state.fast_asset_selector = "➕ 新增全新標的..."
+
     if st.session_state.clear_form:
-        for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: st.session_state[k] = ""
+        for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: 
+            if k in st.session_state: st.session_state[k] = ""
+        if "fast_asset_selector" in st.session_state:
+            st.session_state.fast_asset_selector = "➕ 新增全新標的..."
         st.session_state.clear_form = False
 
-    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
-    REV_MAP = {v:k for k,v in TW_MAP.items()}
-
-    cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
-    if cn != st.session_state.get("prev_name_input", ""):
-        cln = cn.strip()
-        at = TW_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
-        if at: st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
-        st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
-    elif ct != st.session_state.get("prev_ticker_input", ""):
-        clt = ct.strip().upper()
-        if clt in REV_MAP: st.session_state["name_input"] = REV_MAP[clt]
-        st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
-
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
-    name = st.text_input("資產名稱", key="name_input")
-    ticker = st.text_input("代號", key="ticker_input")
-    tv_str = str(ticker).strip().upper()
     
-    if tv_str != st.session_state.prev_ticker:
-        clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
-        st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_ticker = tv_str
-        st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+    # 🟢 新增：下拉選單快速對標現有持倉
+    selected_asset = st.selectbox("快速選擇標的", asset_options, key="fast_asset_selector")
 
-    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
-    if asset_type != st.session_state.prev_type:
-        st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_type = asset_type
+    if selected_asset == "➕ 新增全新標的...":
+        TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
+        REV_MAP = {v:k for k,v in TW_MAP.items()}
 
-    currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
+        cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
+        if cn != st.session_state.get("prev_name_input", ""):
+            cln = cn.strip()
+            at = TW_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
+            if at: st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
+            st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
+        elif ct != st.session_state.get("prev_ticker_input", ""):
+            clt = ct.strip().upper()
+            if clt in REV_MAP: st.session_state["name_input"] = REV_MAP[clt]
+            st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
+
+        name = st.text_input("資產名稱", key="name_input")
+        ticker = st.text_input("代號", key="ticker_input")
+        tv_str = str(ticker).strip().upper()
+        
+        if tv_str != st.session_state.prev_ticker:
+            clt = tv_str.replace(".TW", "").replace(".TWO", "")
+            st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
+            st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
+            st.session_state.prev_ticker = tv_str
+            st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+
+        asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
+        if asset_type != st.session_state.prev_type:
+            st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
+            st.session_state.prev_type = asset_type
+
+        currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
+    else:
+        info = existing_assets[selected_asset]
+        name = info["name"]
+        ticker = info["ticker"]
+        asset_type = info["type"]
+        currency = info["currency"]
+        tv_str = str(ticker).strip().upper()
+        
+        st.text_input("資產名稱", value=name, disabled=True)
+        st.text_input("代號", value=ticker, disabled=True)
+        st.text_input("類型", value=asset_type, disabled=True)
+        st.text_input("幣別", value=currency, disabled=True)
+        
+        if tv_str != st.session_state.prev_ticker:
+            st.session_state.prev_ticker = tv_str
+            st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+
     qty_str = st.text_input("數量", placeholder="SP/CC/配息 可為 0", key="qty_input")
     price_str = st.text_input(f"價格（{currency}）", placeholder="留白自動抓價", key="price_input")
     tr_date = st.date_input("交易日期", value=date.today())
@@ -554,12 +742,12 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                                 
                         cash_hist_df = pd.DataFrame(cash_hist).sort_values('Date')
                         if not cash_hist_df.empty and cash_hist_df['Value'].sum() > 0:
-                            fig_cash_line = go.Figure()
-                            hover_temp = "%{x|%Y-%m-%d}<br>" + safe_unit + " %{y:,.0f}<extra></extra>" if not st.session_state.privacy_mode else "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
-                            fig_cash_line.add_trace(go.Scatter(x=cash_hist_df['Date'], y=cash_hist_df['Value'], mode='lines', name='現金總額', line=dict(color='#00CC96', width=3, shape='linear'), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp))
-                            today_dt = pd.to_datetime(date.today())
-                            start_date = today_dt - pd.DateOffset(months=1) if len(cash_hist_df) <= 30 else cash_hist_df['Date'].min() - pd.Timedelta(days=3)
-                            fig_cash_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
+                            fig_cash_line = _build_cash_trend_fig(
+                                tuple(cash_hist_df['Date'].astype(str).tolist()),
+                                tuple(cash_hist_df['Value'].tolist()),
+                                safe_unit,
+                                st.session_state.privacy_mode
+                            )
                             st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
@@ -567,8 +755,14 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                         st.caption("尚無歷史資料。")
                 with c_chart_right:
                     st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 現金分佈佔比</div>", unsafe_allow_html=True)
-                    fig_cash = go.Figure(data=[go.Pie(labels=cash_df["名稱"], values=cash_df["顯示金額"], pull=[0.03]*len(cash_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#00CC96", "#AB63FA", "#FFA15A", "#636EFA", "#EF553B"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>" if not st.session_state.privacy_mode else "%{label}<br>%{percent}<extra></extra>")])
-                    fig_cash.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=300, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig_cash = _build_pie_fig(
+                        tuple(cash_df["名稱"].tolist()),
+                        tuple(cash_df["顯示金額"].tolist()),
+                        ("#00CC96", "#AB63FA", "#FFA15A", "#636EFA", "#EF553B"),
+                        safe_unit,
+                        st.session_state.privacy_mode,
+                        300
+                    )
                     st.plotly_chart(fig_cash, use_container_width=True)
 
 def render_liability_manager(unit, display_currency, total_value, net_value, btc_usd, usd_twd):
@@ -656,18 +850,24 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                             
                     lib_hist_df = pd.DataFrame(lib_hist).sort_values('Date')
                     if not lib_hist_df.empty:
-                        fig_lib_line = go.Figure()
-                        hover_temp = "%{x|%Y-%m-%d}<br>" + safe_unit + " %{y:,.0f}<extra></extra>" if not st.session_state.privacy_mode else "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
-                        fig_lib_line.add_trace(go.Scatter(x=lib_hist_df['Date'], y=lib_hist_df['Value'], mode='lines', name='負債總額', line=dict(color='#EF553B', width=3, shape='linear'), fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp))
-                        today_dt = pd.to_datetime(date.today())
-                        start_date = today_dt - pd.DateOffset(months=1) if len(lib_hist_df) <= 30 else lib_hist_df['Date'].min() - pd.Timedelta(days=3)
-                        fig_lib_line.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not st.session_state.privacy_mode), hovermode="x unified", dragmode="pan")
+                        fig_lib_line = _build_lib_trend_fig(
+                            tuple(lib_hist_df['Date'].astype(str).tolist()),
+                            tuple(lib_hist_df['Value'].tolist()),
+                            safe_unit,
+                            st.session_state.privacy_mode
+                        )
                         st.plotly_chart(fig_lib_line, use_container_width=True, config={'scrollZoom': True})
             with c_chart_right:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 負債分佈佔比</div>", unsafe_allow_html=True)
                 if not lib_df.empty:
-                    fig_lib = go.Figure(data=[go.Pie(labels=lib_df["名稱"], values=lib_df["顯示金額"], pull=[0.03]*len(lib_df), textinfo="label+percent", textfont=dict(size=14, color="#ffffff"), marker=dict(colors=["#EF553B", "#FFA15A", "#AB63FA", "#636EFA", "#00CC96"], line=dict(color="#111111", width=1.5)), sort=False, hovertemplate="%{label}<br>%{percent}<br>" + safe_unit + " %{value:,.0f}<extra></extra>" if not st.session_state.privacy_mode else "%{label}<br>%{percent}<extra></extra>")])
-                    fig_lib.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=300, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    fig_lib = _build_pie_fig(
+                        tuple(lib_df["名稱"].tolist()),
+                        tuple(lib_df["顯示金額"].tolist()),
+                        ("#EF553B", "#FFA15A", "#AB63FA", "#636EFA", "#00CC96"),
+                        safe_unit,
+                        st.session_state.privacy_mode,
+                        300
+                    )
                     st.plotly_chart(fig_lib, use_container_width=True)
         else: st.caption("目前無負債紀錄。")
 
@@ -704,7 +904,7 @@ if not df.empty:
         cat_total_str = f"{unit.replace('$', '&#36;')} {cat_total_val:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {cat_total_val:,.3f}"
         st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(cat_total_str)}", unsafe_allow_html=True)
     else:
-        # 🟢 修正：在全部視圖下，以「類型」作為分組彙整，確保首頁顯示大類資產
+        # 🟢 修正：在全部視圖下，以「類型」作為分組彙整
         view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
 
     if not view_df.empty:
@@ -779,24 +979,23 @@ if not df.empty:
 
                 if show_bar_chart:
                     bar_font_size = 24 if len(labels) <= 12 else 20 if len(labels) <= 15 else 16 if len(labels) <= 20 else 14 if len(labels) <= 30 else 12
-                    fig = go.Figure(data=[go.Bar(
-                        x=labels, y=values_display, text=bar_text_labels, textposition="outside", textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
-                        hovertemplate="%{x}<br>%{text}<extra></extra>" if privacy else "%{x}<br>%{text}<br>%{y:,.2f}<extra></extra>"
-                    )])
-                    fig.update_layout(
-                        margin=dict(t=40, b=40, l=40, r=40), height=650, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        xaxis=dict(showgrid=False, tickfont=dict(size=16, color="#e2e8f0")), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy)
+                    fig = _build_holdings_bar_fig(
+                        tuple(labels),
+                        tuple(values_display),
+                        tuple(bar_text_labels),
+                        tuple(bar_pie_colors),
+                        privacy,
+                        bar_font_size
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    fig = go.Figure(data=[go.Pie(
-                        labels=labels, values=values_abs, pull=[0.03]*len(labels), text=pie_text_labels, textinfo="text", textposition="auto",
-                        insidetextfont=dict(size=22, color="#ffffff"), outsidetextfont=dict(size=16, color="#e2e8f0"), 
-                        hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
-                        marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
-                    )])
-                    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
+                    fig = _build_holdings_pie_fig(
+                        tuple(labels),
+                        tuple(values_abs),
+                        tuple(pie_text_labels),
+                        tuple(bar_pie_colors),
+                        privacy
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
         with col_nav:
@@ -816,14 +1015,8 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
     st.divider()
     st.subheader(f"📈 {'全部淨資產' if selected_cat is None else selected_cat} 變化趨勢")
     if len(history_snapshots) > 0:
-        hist_d = []
-        for d_str, v in history_snapshots.items():
-            if isinstance(v, dict) and v.get("version") == "v2":
-                d_data = v.get(display_currency, v.get("TWD"))
-                val, cost, liab = d_data.get("value", 0), d_data.get("cost", 0), d_data.get("liability", 0.0)
-                vc = val - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("value", 0)
-                cc = cost - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("cost", 0)
-                hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
+        history_json = json.dumps(history_snapshots, sort_keys=True, default=str)
+        hist_d = _prepare_trend_hist_data(history_json, selected_cat, display_currency)
         
         hdf = pd.DataFrame(hist_d)
         if not hdf.empty:
@@ -848,7 +1041,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                         sgn = "+" if cv>0 else ""
                         def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
                         vs = f"{sgn}{unit.replace('$', '&#36;')} {format_cv_val(abs(cv), display_currency)}"
-                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
             
             if not fdf.empty:
                 fdf['PnL'] = fdf['Value'] - fdf['Cost']
@@ -871,43 +1064,16 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                 fdf['pnl_val_text'] = fdf['PnL'].apply(get_val_text_global)
                 fdf['pnl_pct_text'] = fdf.apply(get_pct_text_global, axis=1)
 
-                fdf['Value_Gain'] = fdf[['Value', 'Cost']].max(axis=1)
-                fdf['Value_Loss'] = fdf[['Value', 'Cost']].min(axis=1)
-                
-                y_max = fdf[['Value', 'Cost']].max().max()
-                y_min = fdf[['Value', 'Cost']].min().min()
-                y_range = y_max - y_min
-                if y_range == 0: y_range = 1
-                
-                fdf['pnl_y'] = fdf[['Value', 'Cost']].min(axis=1) - (y_range * 0.005)
-                fdf['pct_y'] = fdf[['Value', 'Cost']].min(axis=1) - (y_range * 0.010)
-
-                fig = go.Figure()
-                val_name = '淨值' 
-                
-                if privacy:
-                    hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
-                    hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
-                    hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
-                    hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
-                else:
-                    hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
-                    hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
-                    hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
-                    hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
-
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['pct_y'], mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=fdf['pnl_pct_text'] if not privacy else None, hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False))
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['pnl_y'], mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=fdf['pnl_val_text'] if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False))
-                
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', name='成本', line=dict(color='#3b82f6', width=3), hovertemplate=hover_temp_cost))
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value'], mode='lines', name=val_name, line=dict(color='#00CC96', width=3), hovertemplate=hover_temp_val))
-                
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Gain'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-                fig.add_trace(go.Scatter(x=fdf['Date'], y=fdf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
-                
-                fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+                fig = _build_overall_trend_fig(
+                    tuple(fdf['Date'].astype(str).tolist()),
+                    tuple(fdf['Value'].tolist()),
+                    tuple(fdf['Cost'].tolist()),
+                    tuple(fdf['pnl_val_text'].tolist()),
+                    tuple(fdf['pnl_pct_text'].tolist()),
+                    unit_str,
+                    privacy,
+                    '淨值'
+                )
                 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
 render_overall_trend_section(st.session_state.history_snapshots, st.session_state.selected_category, display_currency, usd_twd, btc_usd, unit.replace('$', '&#36;'), privacy)
