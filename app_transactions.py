@@ -334,8 +334,6 @@ if today_s not in st.session_state.history_snapshots or st.session_state.history
 # ========================================================
 # 📊 UI 渲染區段開始
 # ========================================================
-st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
-
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -706,6 +704,7 @@ if not df.empty:
         cat_total_str = f"{unit.replace('$', '&#36;')} {cat_total_val:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {cat_total_val:,.3f}"
         st.markdown(f"目前顯示：**{st.session_state.selected_category}** 分類總額 {mask_val(cat_total_str)}", unsafe_allow_html=True)
     else:
+        # 🟢 修正：在全部視圖下，以「類型」作為分組彙整，確保首頁顯示大類資產
         view_df = df_chart.groupby("類型", as_index=False)["顯示現值"].sum().rename(columns={"類型": "名稱"})
 
     if not view_df.empty:
@@ -715,7 +714,10 @@ if not df.empty:
         plot_df = view_df[view_df["名稱"].isin(st.session_state.visible_items)].copy().sort_values(by="顯示現值", ascending=False).reset_index(drop=True)
         view_total_abs = view_df["顯示現值"].abs().sum()
         plot_total_abs = plot_df["顯示現值"].abs().sum()
+        
+        # 🟢 修正：獨立抓出全局總和，用於計算括號內的「佔總資產比例」
         global_total_abs = df_chart["顯示現值"].abs().sum() 
+        
         colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
 
         st.markdown("**圖例**（點擊可顯示/隱藏）")
@@ -766,7 +768,10 @@ if not df.empty:
                 for lab, val in zip(labels, values_display):
                     abs_val = abs(val)
                     pct_in_view = (abs_val / plot_total_abs * 100) if plot_total_abs > 0 else 0
+                    
+                    # 🟢 修正：括號內的比例使用全局總和 (global_total_abs)
                     pct_of_total = (abs_val / global_total_abs * 100) if global_total_abs > 0 else 0
+                    
                     bar_text_labels.append(f"<b>{pct_in_view:.1f}%<br>({pct_of_total:.1f}%)</b>" if is_category_view else f"<b>{pct_in_view:.1f}%</b>")
                     pie_text_labels.append(f"<b>{lab}</b><br>{pct_in_view:.1f}%<br>({pct_of_total:.1f}%)" if pct_in_view >= 1.0 and is_category_view else f"<b>{lab}</b><br>{pct_in_view:.1f}%" if pct_in_view >= 1.0 else "")
                 
@@ -843,7 +848,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                         sgn = "+" if cv>0 else ""
                         def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
                         vs = f"{sgn}{unit.replace('$', '&#36;')} {format_cv_val(abs(cv), display_currency)}"
-                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
             
             if not fdf.empty:
                 fdf['PnL'] = fdf['Value'] - fdf['Cost']
@@ -933,13 +938,14 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             "原幣現值": df["現值"], 
             f"約當現值({display_currency})": df["顯示現值"],
             "未實現損益": df.apply(lambda r: None if r.get("is_cash") else r["未實現損益"], axis=1),
-            "股息": df.apply(lambda r: None if r.get("is_cash") else r["股息"], axis=1),
+            "已實現損益": df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1),
             "SP權利金": df.apply(lambda r: None if r.get("is_cash") else r["SP權利金"], axis=1),
             "CC權利金": df.apply(lambda r: None if r.get("is_cash") else r["CC權利金"], axis=1),
-            "已實現損益": df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1)
+            "股息": df.apply(lambda r: None if r.get("is_cash") else r["股息"], axis=1)
         })
 
-        cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "原幣現值", f"約當現值({display_currency})", "未實現損益", "股息", "SP權利金", "CC權利金", "已實現損益"]
+        # 🟢 100% 精準還原順序：已實現損益接在未實現損益後方，股息放最後一排
+        cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "原幣現值", f"約當現值({display_currency})", "未實現損益", "已實現損益", "SP權利金", "CC權利金", "股息"]
         
         col_cfg = {
             "數量": st.column_config.NumberColumn("數量"), 
@@ -949,10 +955,10 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             "原幣現值": st.column_config.NumberColumn("原幣現值", format="%,.0f"), 
             f"約當現值({display_currency})": st.column_config.NumberColumn(f"約當現值({display_currency})", format="%,.0f"),
             "未實現損益": st.column_config.NumberColumn("未實現損益", format="%,.0f"),
-            "股息": st.column_config.NumberColumn("股息", format="%,.0f"),
+            "已實現損益": st.column_config.NumberColumn("已實現損益", format="%,.0f"),
             "SP權利金": st.column_config.NumberColumn("SP權利金", format="%,.0f"),
             "CC權利金": st.column_config.NumberColumn("CC權利金", format="%,.0f"),
-            "已實現損益": st.column_config.NumberColumn("已實現損益", format="%,.0f")
+            "股息": st.column_config.NumberColumn("股息", format="%,.0f")
         }
 
         if st.session_state.selected_category:
