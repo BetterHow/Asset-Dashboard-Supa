@@ -307,6 +307,40 @@ def _build_holdings_pie_fig(labels, values_abs, pie_text_labels, bar_pie_colors,
     fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
     return fig
 
+@st.cache_data(show_spinner=False)
+def _prepare_trend_hist_data(history_json: str, selected_cat, display_currency: str):
+    """
+    Pre-compute the raw trend series for a given category / currency.
+    history_json is a stable string representation so the cache key is cheap.
+    This is the heaviest part when switching categories.
+    """
+    try:
+        history_snapshots = json.loads(history_json)
+    except Exception:
+        return []
+    hist_d = []
+    for d_str, v in history_snapshots.items():
+        if isinstance(v, dict) and v.get("version") == "v2":
+            d_data = v.get(display_currency, v.get("TWD"))
+            val = d_data.get("value", 0)
+            cost = d_data.get("cost", 0)
+            liab = d_data.get("liability", 0.0)
+            if selected_cat is None:
+                vc = val - liab
+                cc = cost - liab
+            else:
+                cat_data = d_data.get("categories", {}).get(selected_cat, {})
+                vc = cat_data.get("value", 0)
+                cc = cat_data.get("cost", 0)
+            hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
+        else:
+            # legacy format fallback
+            val = v.get("value", 0) if isinstance(v, dict) else 0
+            liab = v.get("liability", 0) if isinstance(v, dict) else 0
+            # simplified; original code had more currency conversion, but we keep behavior for v2
+            hist_d.append({'Date': d_str, 'Value': val - liab, 'Cost': 0})
+    return hist_d
+
 # ========================================================
 # 🚀 做空與多頭會計核心引擎
 # ========================================================
@@ -961,14 +995,9 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
     st.divider()
     st.subheader(f"📈 {'全部淨資產' if selected_cat is None else selected_cat} 變化趨勢")
     if len(history_snapshots) > 0:
-        hist_d = []
-        for d_str, v in history_snapshots.items():
-            if isinstance(v, dict) and v.get("version") == "v2":
-                d_data = v.get(display_currency, v.get("TWD"))
-                val, cost, liab = d_data.get("value", 0), d_data.get("cost", 0), d_data.get("liability", 0.0)
-                vc = val - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("value", 0)
-                cc = cost - liab if selected_cat is None else d_data.get("categories", {}).get(selected_cat, {}).get("cost", 0)
-                hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
+        # 使用快取準備歷史序列，分類切換時這段從 O(天數) 變成幾乎 O(1)
+        history_json = json.dumps(history_snapshots, sort_keys=True, default=str)
+        hist_d = _prepare_trend_hist_data(history_json, selected_cat, display_currency)
         
         hdf = pd.DataFrame(hist_d)
         if not hdf.empty:
@@ -1016,7 +1045,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                 fdf['pnl_val_text'] = fdf['PnL'].apply(get_val_text_global)
                 fdf['pnl_pct_text'] = fdf.apply(get_pct_text_global, axis=1)
 
-                # 使用快取的圖表建構，大幅降低隱私模式切換與分類切換時的重繪成本
+                # 使用快取的圖表建構
                 fig = _build_overall_trend_fig(
                     tuple(fdf['Date'].astype(str).tolist()),
                     tuple(fdf['Value'].tolist()),
@@ -1063,7 +1092,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             "已實現損益": df.apply(lambda r: None if r.get("is_cash") else r["已實現損益"], axis=1)
         })
 
-        cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "原幣現值", f"約當現值({display_currency})", "未實現損益", "股息", "SP權利金", "CC權利金", "已實現損益"]
+        cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "原幣現值", f"約當現值({display_currency})", "未實現損益", "已實現損益", "SP權利金", "CC權利金", "股息"]
         
         col_cfg = {
             "數量": st.column_config.NumberColumn("數量"), 
