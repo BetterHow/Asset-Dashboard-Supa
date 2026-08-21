@@ -101,7 +101,6 @@ if st.session_state.user is None:
 # ========================================================
 # 📊 正式 App 初始化與狀態管理
 # ========================================================
-# 🟢 修正：加入 CSS 強制隱藏 Plotly 拖曳時的四向箭頭游標，維持預設箭頭
 st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; } .js-plotly-plot .plotly .nsewdrag, .js-plotly-plot .plotly .ewdrag, .js-plotly-plot .plotly .nsdrag, .js-plotly-plot .plotly .cursor-crosshair, .js-plotly-plot .plotly .cursor-move { cursor: default !important; }</style>""", unsafe_allow_html=True)
 
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
@@ -483,6 +482,8 @@ if today_s not in st.session_state.history_snapshots or st.session_state.history
 # ========================================================
 # 📊 UI 渲染區段開始
 # ========================================================
+st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; } .js-plotly-plot .plotly .nsewdrag, .js-plotly-plot .plotly .ewdrag, .js-plotly-plot .plotly .nsdrag, .js-plotly-plot .plotly .cursor-crosshair, .js-plotly-plot .plotly .cursor-move { cursor: default !important; }</style>""", unsafe_allow_html=True)
+
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -511,110 +512,72 @@ with st.sidebar:
     
     st.header("新增交易")
     
-    existing_assets = {}
-    for t in st.session_state.transactions:
-        tk = t.get("ticker", "").strip().upper()
-        nm = t.get("name", "").strip()
-        if nm or tk:
-            label = f"{nm} ({tk})" if tk else nm
-            if label not in existing_assets:
-                existing_assets[label] = {
-                    "name": nm,
-                    "ticker": tk,
-                    "type": t.get("type_category", "其他"),
-                    "currency": t.get("currency", "TWD")
-                }
-    asset_options = ["➕ 新增全新標的..."] + sorted(list(existing_assets.keys()))
-    
-    if "fast_asset_selector" not in st.session_state:
-        st.session_state.fast_asset_selector = "➕ 新增全新標的..."
-
     if st.session_state.clear_form:
         for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: 
             if k in st.session_state: st.session_state[k] = ""
-        if "fast_asset_selector" in st.session_state:
-            st.session_state.fast_asset_selector = "➕ 新增全新標的..."
         st.session_state.clear_form = False
 
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
-    selected_asset = st.selectbox("快速選擇標的", asset_options, key="fast_asset_selector")
 
-    if selected_asset == "➕ 新增全新標的...":
-        TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
-        
-        user_name_to_ticker = {}
-        user_ticker_to_name = {}
-        user_ticker_to_type = {}
-        user_ticker_to_curr = {}
-        for t in st.session_state.transactions:
-            nm = t.get("name", "").strip()
-            tk = t.get("ticker", "").strip().upper()
-            ty = t.get("type_category", "其他")
-            cu = t.get("currency", "TWD")
-            if nm and tk:
-                user_name_to_ticker[nm] = tk
-                user_ticker_to_name[tk] = nm
-                if tk not in user_ticker_to_type:
-                    user_ticker_to_type[tk] = ty
-                    user_ticker_to_curr[tk] = cu
-        
-        COMBINED_MAP = {**TW_MAP, **user_name_to_ticker}
-        REV_MAP = {v:k for k,v in TW_MAP.items()}
-        COMBINED_REV_MAP = {**REV_MAP, **user_ticker_to_name}
+    # 🟢 背景隱形映射：結合預設清單與歷史持倉
+    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
+    
+    user_name_to_ticker = {}
+    user_ticker_to_name = {}
+    user_ticker_to_type = {}
+    user_ticker_to_curr = {}
+    for t in st.session_state.transactions:
+        nm = t.get("name", "").strip()
+        tk = t.get("ticker", "").strip().upper()
+        ty = t.get("type_category", "其他")
+        cu = t.get("currency", "TWD")
+        if nm and tk:
+            user_name_to_ticker[nm] = tk
+            user_ticker_to_name[tk] = nm
+            if tk not in user_ticker_to_type:
+                user_ticker_to_type[tk] = ty
+                user_ticker_to_curr[tk] = cu
+    
+    COMBINED_MAP = {**TW_MAP, **user_name_to_ticker}
+    REV_MAP = {v:k for k,v in TW_MAP.items()}
+    COMBINED_REV_MAP = {**REV_MAP, **user_ticker_to_name}
 
-        cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
-        if cn != st.session_state.get("prev_name_input", ""):
-            cln = cn.strip()
-            at = COMBINED_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
-            if at: 
-                st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
-                if at in user_ticker_to_type:
-                    st.session_state["type_select"] = user_ticker_to_type[at]
-                    st.session_state["currency_select"] = user_ticker_to_curr[at]
-            st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
-        elif ct != st.session_state.get("prev_ticker_input", ""):
-            clt = ct.strip().upper()
-            if clt in COMBINED_REV_MAP: 
-                st.session_state["name_input"] = COMBINED_REV_MAP[clt]
-            if clt in user_ticker_to_type:
-                st.session_state["type_select"] = user_ticker_to_type[clt]
-                st.session_state["currency_select"] = user_ticker_to_curr[clt]
-            st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
+    cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
+    if cn != st.session_state.get("prev_name_input", ""):
+        cln = cn.strip()
+        at = COMBINED_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
+        if at: 
+            st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
+            if at in user_ticker_to_type:
+                st.session_state["type_select"] = user_ticker_to_type[at]
+                st.session_state["currency_select"] = user_ticker_to_curr[at]
+        st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
+    elif ct != st.session_state.get("prev_ticker_input", ""):
+        clt = ct.strip().upper()
+        if clt in COMBINED_REV_MAP: 
+            st.session_state["name_input"] = COMBINED_REV_MAP[clt]
+        if clt in user_ticker_to_type:
+            st.session_state["type_select"] = user_ticker_to_type[clt]
+            st.session_state["currency_select"] = user_ticker_to_curr[clt]
+        st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
 
-        name = st.text_input("資產名稱", key="name_input")
-        ticker = st.text_input("代號", key="ticker_input")
-        tv_str = str(ticker).strip().upper()
-        
-        if tv_str != st.session_state.prev_ticker:
-            clt = tv_str.replace(".TW", "").replace(".TWO", "")
-            st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
-            st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
-            st.session_state.prev_ticker = tv_str
-            st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+    name = st.text_input("資產名稱", key="name_input")
+    ticker = st.text_input("代號", key="ticker_input")
+    tv_str = str(ticker).strip().upper()
+    
+    if tv_str != st.session_state.prev_ticker:
+        clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
+        st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
+        st.session_state.prev_ticker = tv_str
+        st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
 
-        asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
-        if asset_type != st.session_state.prev_type:
-            st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
-            st.session_state.prev_type = asset_type
+    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
+    if asset_type != st.session_state.prev_type:
+        st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
+        st.session_state.prev_type = asset_type
 
-        currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
-    else:
-        info = existing_assets[selected_asset]
-        name = info["name"]
-        ticker = info["ticker"]
-        asset_type = info["type"]
-        currency = info["currency"]
-        tv_str = str(ticker).strip().upper()
-        
-        st.text_input("資產名稱", value=name, disabled=True)
-        st.text_input("代號", value=ticker, disabled=True)
-        st.text_input("類型", value=asset_type, disabled=True)
-        st.text_input("幣別", value=currency, disabled=True)
-        
-        if tv_str != st.session_state.prev_ticker:
-            st.session_state.prev_ticker = tv_str
-            st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
-
+    currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
     qty_str = st.text_input("數量", placeholder="SP/CC/配息 可為 0", key="qty_input")
     price_str = st.text_input(f"價格（{currency}）", placeholder="留白自動抓價", key="price_input")
     tr_date = st.date_input("交易日期", value=date.today())
@@ -770,15 +733,20 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                                 div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                                 cash_hist.append({'Date': d_str, 'Value': c_val / div})
                                 
-                        cash_hist_df = pd.DataFrame(cash_hist).sort_values('Date')
-                        if not cash_hist_df.empty and cash_hist_df['Value'].sum() > 0:
-                            fig_cash_line = _build_cash_trend_fig(
-                                tuple(cash_hist_df['Date'].astype(str).tolist()),
-                                tuple(cash_hist_df['Value'].tolist()),
-                                safe_unit,
-                                st.session_state.privacy_mode
-                            )
-                            st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
+                        cash_hist_df = pd.DataFrame(cash_hist)
+                        if not cash_hist_df.empty:
+                            cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
+                            cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
+                            if cash_hist_df['Value'].sum() > 0:
+                                fig_cash_line = _build_cash_trend_fig(
+                                    tuple(cash_hist_df['Date'].astype(str).tolist()),
+                                    tuple(cash_hist_df['Value'].tolist()),
+                                    safe_unit,
+                                    st.session_state.privacy_mode
+                                )
+                                st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
+                            else:
+                                st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                     else:
@@ -878,8 +846,10 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                             div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                             lib_hist.append({'Date': d_str, 'Value': liab / div})
                             
-                    lib_hist_df = pd.DataFrame(lib_hist).sort_values('Date')
+                    lib_hist_df = pd.DataFrame(lib_hist)
                     if not lib_hist_df.empty:
+                        lib_hist_df['Date'] = pd.to_datetime(lib_hist_df['Date'])
+                        lib_hist_df = lib_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
                         fig_lib_line = _build_lib_trend_fig(
                             tuple(lib_hist_df['Date'].astype(str).tolist()),
                             tuple(lib_hist_df['Value'].tolist()),
