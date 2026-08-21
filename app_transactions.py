@@ -252,7 +252,7 @@ def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts,
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', name='成本', line=dict(color='#3b82f6', width=3), hovertemplate=hover_temp_cost))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_value, mode='lines', name=val_name, line=dict(color='#00CC96', width=3), hovertemplate=hover_temp_val))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
     fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
@@ -365,7 +365,7 @@ def calculate_holdings(transactions):
         if abs(h["數量"]) > 0.0001 or h["CC權利金"] > 0 or h["SP權利金"] > 0 or h["股息"] > 0 or h["已實現損益"] != 0 or h["歷史買進數量"] > 0 or h["歷史賣出數量"] > 0:
             result.append({
                 "名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"],
-                "數量": h["數量"], "原始總成本": h["原始總成本"], "平均成本": h["avg_cost"],
+                "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
                 "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
                 "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], "is_cash": False
             })
@@ -418,12 +418,15 @@ for acc in st.session_state.cash_accounts:
     holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True})
 
 for h in holdings:
-    if h.get("is_cash"): h["總成本"], h["調整後成本"] = h["原始總成本"], 1.0
+    if h.get("is_cash"): 
+        h["總成本"], h["調整後價格"], h["歷史總均價"] = h["原始總成本"], 1.0, 1.0
     else:
         eff = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] if st.session_state.get("include_premium", False) else h["原始總成本"]
-        h["總成本"], h["調整後成本"] = eff, (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"])/h["數量"] if abs(h["數量"])>0 else 0
+        h["總成本"] = eff
+        h["調整後價格"] = (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"]) / h["數量"] if abs(h["數量"]) > 0 else 0
+        h["歷史總均價"] = (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] - h["已實現損益"]) / h["數量"] if abs(h["數量"]) > 0 else 0
 
-df = pd.DataFrame(holdings) if holdings else pd.DataFrame(columns=["名稱", "代號", "幣別", "類型", "數量", "原始總成本", "平均成本", "CC權利金", "SP權利金", "股息", "已實現損益", "歷史買進數量", "歷史賣出數量", "is_cash", "總成本", "調整後成本"])
+df = pd.DataFrame(holdings) if holdings else pd.DataFrame(columns=["名稱", "代號", "幣別", "類型", "數量", "原始總成本", "平均價格", "CC權利金", "SP權利金", "股息", "已實現損益", "歷史買進數量", "歷史賣出數量", "is_cash", "總成本", "調整後價格", "歷史總均價"])
 if not df.empty:
     df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
     cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and not r.get("is_cash"))))
@@ -504,70 +507,111 @@ with st.sidebar:
     st.divider()
     
     st.header("新增交易")
+    
+    existing_assets = {}
+    for t in st.session_state.transactions:
+        tk = t.get("ticker", "").strip().upper()
+        nm = t.get("name", "").strip()
+        if nm or tk:
+            label = f"{nm} ({tk})" if tk else nm
+            if label not in existing_assets:
+                existing_assets[label] = {
+                    "name": nm,
+                    "ticker": tk,
+                    "type": t.get("type_category", "其他"),
+                    "currency": t.get("currency", "TWD")
+                }
+    asset_options = ["➕ 新增全新標的..."] + sorted(list(existing_assets.keys()))
+    
+    if "fast_asset_selector" not in st.session_state:
+        st.session_state.fast_asset_selector = "➕ 新增全新標的..."
+
     if st.session_state.clear_form:
-        for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: st.session_state[k] = ""
+        for k in ["name_input", "ticker_input", "qty_input", "price_input", "note_input", "prev_name_input", "prev_ticker_input"]: 
+            if k in st.session_state: st.session_state[k] = ""
+        if "fast_asset_selector" in st.session_state:
+            st.session_state.fast_asset_selector = "➕ 新增全新標的..."
         st.session_state.clear_form = False
 
-    # 🟢 動態建立持倉對應字典，加入常見標的，實現完美防呆映射
-    user_name_to_ticker = {}
-    user_ticker_to_name = {}
-    user_ticker_to_type = {}
-    user_ticker_to_curr = {}
-    for t in st.session_state.transactions:
-        nm = t.get("name", "").strip()
-        tk = t.get("ticker", "").strip().upper()
-        ty = t.get("type_category", "其他")
-        cu = t.get("currency", "TWD")
-        if nm and tk:
-            user_name_to_ticker[nm] = tk
-            user_ticker_to_name[tk] = nm
-            if tk not in user_ticker_to_type:
-                user_ticker_to_type[tk] = ty
-                user_ticker_to_curr[tk] = cu
-
-    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
-    
-    COMBINED_MAP = {**TW_MAP, **user_name_to_ticker}
-    REV_MAP = {v:k for k,v in TW_MAP.items()}
-    COMBINED_REV_MAP = {**REV_MAP, **user_ticker_to_name}
-
-    cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
-    if cn != st.session_state.get("prev_name_input", ""):
-        cln = cn.strip()
-        at = COMBINED_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
-        if at: 
-            st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
-            if at in user_ticker_to_type:
-                st.session_state["type_select"] = user_ticker_to_type[at]
-                st.session_state["currency_select"] = user_ticker_to_curr[at]
-        st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
-    elif ct != st.session_state.get("prev_ticker_input", ""):
-        clt = ct.strip().upper()
-        if clt in COMBINED_REV_MAP: 
-            st.session_state["name_input"] = COMBINED_REV_MAP[clt]
-        if clt in user_ticker_to_type:
-            st.session_state["type_select"] = user_ticker_to_type[clt]
-            st.session_state["currency_select"] = user_ticker_to_curr[clt]
-        st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
-
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
-    name = st.text_input("資產名稱", key="name_input")
-    ticker = st.text_input("代號", key="ticker_input")
-    tv_str = str(ticker).strip().upper()
-    
-    if tv_str != st.session_state.prev_ticker:
-        clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
-        st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_ticker = tv_str
-        st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+    selected_asset = st.selectbox("快速選擇標的", asset_options, key="fast_asset_selector")
 
-    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
-    if asset_type != st.session_state.prev_type:
-        st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
-        st.session_state.prev_type = asset_type
+    if selected_asset == "➕ 新增全新標的...":
+        TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
+        
+        user_name_to_ticker = {}
+        user_ticker_to_name = {}
+        user_ticker_to_type = {}
+        user_ticker_to_curr = {}
+        for t in st.session_state.transactions:
+            nm = t.get("name", "").strip()
+            tk = t.get("ticker", "").strip().upper()
+            ty = t.get("type_category", "其他")
+            cu = t.get("currency", "TWD")
+            if nm and tk:
+                user_name_to_ticker[nm] = tk
+                user_ticker_to_name[tk] = nm
+                if tk not in user_ticker_to_type:
+                    user_ticker_to_type[tk] = ty
+                    user_ticker_to_curr[tk] = cu
+        
+        COMBINED_MAP = {**TW_MAP, **user_name_to_ticker}
+        REV_MAP = {v:k for k,v in TW_MAP.items()}
+        COMBINED_REV_MAP = {**REV_MAP, **user_ticker_to_name}
 
-    currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
+        cn, ct = st.session_state.get("name_input", ""), st.session_state.get("ticker_input", "")
+        if cn != st.session_state.get("prev_name_input", ""):
+            cln = cn.strip()
+            at = COMBINED_MAP.get(cln) or (cln.upper() if re.fullmatch(r"[A-Z0-9.\-]{1,15}", cln.upper()) else None)
+            if at: 
+                st.session_state["ticker_input"] = {"BTC":"BTC-USD", "ETH":"ETH-USD"}.get(at, at)
+                if at in user_ticker_to_type:
+                    st.session_state["type_select"] = user_ticker_to_type[at]
+                    st.session_state["currency_select"] = user_ticker_to_curr[at]
+            st.session_state["prev_name_input"], st.session_state["prev_ticker_input"] = cn, st.session_state.get("ticker_input", "")
+        elif ct != st.session_state.get("prev_ticker_input", ""):
+            clt = ct.strip().upper()
+            if clt in COMBINED_REV_MAP: 
+                st.session_state["name_input"] = COMBINED_REV_MAP[clt]
+            if clt in user_ticker_to_type:
+                st.session_state["type_select"] = user_ticker_to_type[clt]
+                st.session_state["currency_select"] = user_ticker_to_curr[clt]
+            st.session_state["prev_ticker_input"], st.session_state["prev_name_input"] = ct, st.session_state.get("name_input", "")
+
+        name = st.text_input("資產名稱", key="name_input")
+        ticker = st.text_input("代號", key="ticker_input")
+        tv_str = str(ticker).strip().upper()
+        
+        if tv_str != st.session_state.prev_ticker:
+            clt = tv_str.replace(".TW", "").replace(".TWO", "")
+            st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
+            st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
+            st.session_state.prev_ticker = tv_str
+            st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+
+        asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
+        if asset_type != st.session_state.prev_type:
+            st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
+            st.session_state.prev_type = asset_type
+
+        currency = st.selectbox("幣別", ["TWD", "USD"], key="currency_select")
+    else:
+        info = existing_assets[selected_asset]
+        name = info["name"]
+        ticker = info["ticker"]
+        asset_type = info["type"]
+        currency = info["currency"]
+        tv_str = str(ticker).strip().upper()
+        
+        st.text_input("資產名稱", value=name, disabled=True)
+        st.text_input("代號", value=ticker, disabled=True)
+        st.text_input("類型", value=asset_type, disabled=True)
+        st.text_input("幣別", value=currency, disabled=True)
+        
+        if tv_str != st.session_state.prev_ticker:
+            st.session_state.prev_ticker = tv_str
+            st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
+
     qty_str = st.text_input("數量", placeholder="SP/CC/配息 可為 0", key="qty_input")
     price_str = st.text_input(f"價格（{currency}）", placeholder="留白自動抓價", key="price_input")
     tr_date = st.date_input("交易日期", value=date.today())
@@ -1075,8 +1119,9 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             "持倉狀態": df["持倉狀態"],
             "名稱": df["名稱"], "代號": df["代號"], "類型": df["類型"], "幣別": df["幣別"], 
             "數量": df["數量"],
-            "平均成本": df.apply(lambda r: None if r.get("is_cash") else abs(r["平均成本"]), axis=1),
-            "調整後成本": df.apply(lambda r: None if r.get("is_cash") else abs(r["調整後成本"]), axis=1),
+            "平均價格": df.apply(lambda r: None if r.get("is_cash") else abs(r["平均價格"]), axis=1),
+            "調整後價格": df.apply(lambda r: None if r.get("is_cash") else abs(r["調整後價格"]), axis=1),
+            "歷史總均價": df.apply(lambda r: None if r.get("is_cash") else r["歷史總均價"], axis=1),
             "現價": df.apply(lambda r: None if r.get("is_cash") else r["現價"], axis=1),
             "原幣現值": df["現值"], 
             f"約當現值({display_currency})": df["顯示現值"],
@@ -1087,12 +1132,13 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             "股息": df.apply(lambda r: None if r.get("is_cash") else r["股息"], axis=1)
         })
 
-        cols = ["名稱", "代號", "類型", "幣別", "數量", "平均成本", "調整後成本", "現價", "原幣現值", f"約當現值({display_currency})", "未實現損益", "已實現損益", "SP權利金", "CC權利金", "股息"]
+        cols = ["名稱", "代號", "類型", "幣別", "數量", "平均價格", "調整後價格", "歷史總均價", "現價", "原幣現值", f"約當現值({display_currency})", "未實現損益", "已實現損益", "SP權利金", "CC權利金", "股息"]
         
         col_cfg = {
             "數量": st.column_config.NumberColumn("數量"), 
-            "平均成本": st.column_config.NumberColumn("平均成本", format="%,.4f"),
-            "調整後成本": st.column_config.NumberColumn("調整後成本", format="%,.4f"),
+            "平均價格": st.column_config.NumberColumn("平均價格", format="%,.4f"),
+            "調整後價格": st.column_config.NumberColumn("調整後價格", format="%,.4f"),
+            "歷史總均價": st.column_config.NumberColumn("歷史總均價", format="%,.4f"),
             "現價": st.column_config.NumberColumn("現價", format="%,.4f"), 
             "原幣現值": st.column_config.NumberColumn("原幣現值", format="%,.0f"), 
             f"約當現值({display_currency})": st.column_config.NumberColumn(f"約當現值({display_currency})", format="%,.0f"),
