@@ -101,7 +101,8 @@ if st.session_state.user is None:
 # ========================================================
 # 📊 正式 App 初始化與狀態管理
 # ========================================================
-st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
+# 🟢 修正：加入 CSS 強制隱藏 Plotly 拖曳時的四向箭頭游標，維持預設箭頭
+st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; } .js-plotly-plot .plotly .nsewdrag, .js-plotly-plot .plotly .ewdrag, .js-plotly-plot .plotly .nsdrag, .js-plotly-plot .plotly .cursor-crosshair, .js-plotly-plot .plotly .cursor-move { cursor: default !important; }</style>""", unsafe_allow_html=True)
 
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
@@ -189,7 +190,7 @@ def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-            hovermode="x unified", dragmode=False
+            hovermode="x unified", dragmode="pan"
         )
     return fig
 
@@ -222,7 +223,7 @@ def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-            hovermode="x unified", dragmode=False
+            hovermode="x unified", dragmode="pan"
         )
     return fig
 
@@ -259,7 +260,7 @@ def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts,
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
     
     dtick_val = 86400000 if len(fdf_dates) <= 40 else None
-    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", dtick=dtick_val), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode=False)
+    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", dtick=dtick_val), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
     return fig
 
 @st.cache_data(show_spinner=False)
@@ -482,8 +483,6 @@ if today_s not in st.session_state.history_snapshots or st.session_state.history
 # ========================================================
 # 📊 UI 渲染區段開始
 # ========================================================
-st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }</style>""", unsafe_allow_html=True)
-
 col_rate, col_select, col_empty = st.columns([1.2, 0.7, 3.1])
 with col_rate: st.markdown(f"<span style='font-size:18px; font-weight:600'>USD / TWD {usd_twd:.3f}</span>", unsafe_allow_html=True)
 with col_select:
@@ -771,20 +770,15 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                                 div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                                 cash_hist.append({'Date': d_str, 'Value': c_val / div})
                                 
-                        cash_hist_df = pd.DataFrame(cash_hist)
-                        if not cash_hist_df.empty:
-                            cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
-                            cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                            if cash_hist_df['Value'].sum() > 0:
-                                fig_cash_line = _build_cash_trend_fig(
-                                    tuple(cash_hist_df['Date'].astype(str).tolist()),
-                                    tuple(cash_hist_df['Value'].tolist()),
-                                    safe_unit,
-                                    st.session_state.privacy_mode
-                                )
-                                st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
-                            else:
-                                st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+                        cash_hist_df = pd.DataFrame(cash_hist).sort_values('Date')
+                        if not cash_hist_df.empty and cash_hist_df['Value'].sum() > 0:
+                            fig_cash_line = _build_cash_trend_fig(
+                                tuple(cash_hist_df['Date'].astype(str).tolist()),
+                                tuple(cash_hist_df['Value'].tolist()),
+                                safe_unit,
+                                st.session_state.privacy_mode
+                            )
+                            st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                     else:
@@ -884,10 +878,8 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                             div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                             lib_hist.append({'Date': d_str, 'Value': liab / div})
                             
-                    lib_hist_df = pd.DataFrame(lib_hist)
+                    lib_hist_df = pd.DataFrame(lib_hist).sort_values('Date')
                     if not lib_hist_df.empty:
-                        lib_hist_df['Date'] = pd.to_datetime(lib_hist_df['Date'])
-                        lib_hist_df = lib_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
                         fig_lib_line = _build_lib_trend_fig(
                             tuple(lib_hist_df['Date'].astype(str).tolist()),
                             tuple(lib_hist_df['Value'].tolist()),
@@ -1331,7 +1323,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
-                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode=False)
+                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
                     st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
                 with c2:
@@ -1358,7 +1350,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode=False)
+                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
