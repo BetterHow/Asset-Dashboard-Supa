@@ -252,7 +252,7 @@ def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts,
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', name='成本', line=dict(color='#3b82f6', width=3), hovertemplate=hover_temp_cost))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_value, mode='lines', name=val_name, line=dict(color='#00CC96', width=3), hovertemplate=hover_temp_val))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=fdf_dates, y=value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
     fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
