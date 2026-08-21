@@ -182,13 +182,14 @@ def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
         fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp
     ))
     if dates:
+        dtick_val = 86400000 if len(dates) <= 40 else None
         today_dt = pd.to_datetime(date.today())
         start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-            hovermode="x unified", dragmode="pan"
+            hovermode="x unified", dragmode=False
         )
     return fig
 
@@ -214,13 +215,14 @@ def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
         fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp
     ))
     if dates:
+        dtick_val = 86400000 if len(dates) <= 40 else None
         today_dt = pd.to_datetime(date.today())
         start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-            hovermode="x unified", dragmode="pan"
+            hovermode="x unified", dragmode=False
         )
     return fig
 
@@ -255,7 +257,9 @@ def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts,
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
-    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+    
+    dtick_val = 86400000 if len(fdf_dates) <= 40 else None
+    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", dtick=dtick_val), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode=False)
     return fig
 
 @st.cache_data(show_spinner=False)
@@ -767,15 +771,20 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                                 div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                                 cash_hist.append({'Date': d_str, 'Value': c_val / div})
                                 
-                        cash_hist_df = pd.DataFrame(cash_hist).sort_values('Date')
-                        if not cash_hist_df.empty and cash_hist_df['Value'].sum() > 0:
-                            fig_cash_line = _build_cash_trend_fig(
-                                tuple(cash_hist_df['Date'].astype(str).tolist()),
-                                tuple(cash_hist_df['Value'].tolist()),
-                                safe_unit,
-                                st.session_state.privacy_mode
-                            )
-                            st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
+                        cash_hist_df = pd.DataFrame(cash_hist)
+                        if not cash_hist_df.empty:
+                            cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
+                            cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
+                            if cash_hist_df['Value'].sum() > 0:
+                                fig_cash_line = _build_cash_trend_fig(
+                                    tuple(cash_hist_df['Date'].astype(str).tolist()),
+                                    tuple(cash_hist_df['Value'].tolist()),
+                                    safe_unit,
+                                    st.session_state.privacy_mode
+                                )
+                                st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
+                            else:
+                                st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                     else:
@@ -875,8 +884,10 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                             div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                             lib_hist.append({'Date': d_str, 'Value': liab / div})
                             
-                    lib_hist_df = pd.DataFrame(lib_hist).sort_values('Date')
+                    lib_hist_df = pd.DataFrame(lib_hist)
                     if not lib_hist_df.empty:
+                        lib_hist_df['Date'] = pd.to_datetime(lib_hist_df['Date'])
+                        lib_hist_df = lib_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
                         fig_lib_line = _build_lib_trend_fig(
                             tuple(lib_hist_df['Date'].astype(str).tolist()),
                             tuple(lib_hist_df['Value'].tolist()),
@@ -1042,7 +1053,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
         hdf = pd.DataFrame(hist_d)
         if not hdf.empty:
             hdf['Date'] = pd.to_datetime(hdf['Date'])
-            hdf = hdf.sort_values('Date')
+            hdf = hdf.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
 
             cr, cp = st.columns([2.5, 1.5])
             with cr:
@@ -1320,7 +1331,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
-                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode=False)
                     st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
                 with c2:
@@ -1347,7 +1358,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
+                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode=False)
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
