@@ -1103,7 +1103,7 @@ render_overall_trend_section(st.session_state.history_snapshots, st.session_stat
 # 📝 持倉明細表
 # ========================================================
 st.divider()
-st.subheader("持倉明細 (全部)")
+st.subheader(f"持倉明細 ({st.session_state.selected_category if st.session_state.selected_category else '全部'})")
 with st.expander("點此展開 / 收合明細表", expanded=False):
     if not df.empty:
         def det_stat(r):
