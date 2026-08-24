@@ -514,6 +514,7 @@ with st.sidebar:
 
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
 
+    # 🟢 背景隱形映射：結合預設清單與歷史持倉
     TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
     
     user_name_to_ticker = {}
@@ -1323,111 +1324,119 @@ render_individual_analysis(st.session_state.transactions, privacy, display_curre
 # 📝 交易紀錄管理
 # ========================================================
 st.divider()
-st.subheader("交易紀錄管理")
+st.subheader(f"交易紀錄管理 ({st.session_state.selected_category if st.session_state.selected_category else '全部'})")
 if st.session_state.transactions:
     tx_df = pd.DataFrame(st.session_state.transactions)
     tx_df["date_obj"] = pd.to_datetime(tx_df["date"]).dt.date
     tx_df = tx_df.sort_values("date", ascending=False).reset_index(drop=True)
-    min_d, max_d, today_d = tx_df["date_obj"].min(), tx_df["date_obj"].max(), date.today()
     
-    tx_df["target_label"] = tx_df.apply(lambda row: f"{row['name']} ({row['ticker']})" if row['ticker'] else row['name'], axis=1)
-    target_options = ["全部"] + sorted(tx_df["target_label"].unique().tolist())
+    # 🟢 連動上方的分類選擇
+    if st.session_state.selected_category:
+        tx_df = tx_df[tx_df["type_category"] == st.session_state.selected_category]
 
-    f_c1, f_c2, f_c3 = st.columns(3)
-    with f_c1:
-        date_preset = st.selectbox("篩選時間範圍", ["全部", "本月", "半年", "一年", "自訂區間"])
-        date_range = st.date_input("選擇日期", value=(min_d, max_d), min_value=min_d, max_value=max_d) if date_preset == "自訂區間" else (min_d, max_d) if date_preset == "全部" else (today_d.replace(day=1), today_d) if date_preset == "本月" else (today_d - timedelta(days=183), today_d) if date_preset == "半年" else (today_d - timedelta(days=365), today_d)
-    with f_c2: selected_target = st.selectbox("篩選標的", target_options)
-    with f_c3: action_filter = st.selectbox("篩選動作", ["全部", "買進", "賣出", "Sell Put", "Covered Call", "配息"])
+    if tx_df.empty:
+        st.info(f"目前沒有 {st.session_state.selected_category} 的交易紀錄。")
+    else:
+        min_d, max_d, today_d = tx_df["date_obj"].min(), tx_df["date_obj"].max(), date.today()
+        
+        tx_df["target_label"] = tx_df.apply(lambda row: f"{row['name']} ({row['ticker']})" if row['ticker'] else row['name'], axis=1)
+        target_options = ["全部"] + sorted(tx_df["target_label"].unique().tolist())
 
-    if isinstance(date_range, tuple):
-        if len(date_range) == 2: tx_df = tx_df[(tx_df["date_obj"] >= date_range[0]) & (tx_df["date_obj"] <= date_range[1])]
-        elif len(date_range) == 1: tx_df = tx_df[tx_df["date_obj"] == date_range[0]]
-    if selected_target != "全部": tx_df = tx_df[tx_df["target_label"] == selected_target]
-    if action_filter != "全部": tx_df = tx_df[tx_df["type"] == action_filter]
-    st.caption(f"共找到 {len(tx_df)} 筆紀錄")
+        f_c1, f_c2, f_c3 = st.columns(3)
+        with f_c1:
+            date_preset = st.selectbox("篩選時間範圍", ["全部", "本月", "半年", "一年", "自訂區間"])
+            date_range = st.date_input("選擇日期", value=(min_d, max_d), min_value=min_d, max_value=max_d) if date_preset == "自訂區間" else (min_d, max_d) if date_preset == "全部" else (today_d.replace(day=1), today_d) if date_preset == "本月" else (today_d - timedelta(days=183), today_d) if date_preset == "半年" else (today_d - timedelta(days=365), today_d)
+        with f_c2: selected_target = st.selectbox("篩選標的", target_options)
+        with f_c3: action_filter = st.selectbox("篩選動作", ["全部", "買進", "賣出", "Sell Put", "Covered Call", "配息"])
 
-    def render_tx_rows(df_to_render):
-        for i, row in df_to_render.iterrows():
-            if st.session_state.editing_id == row["id"]:
-                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
-                with c1: new_date = st.date_input("日期", value=date.fromisoformat(row["date"]), key=f"ed_d_{row['id']}", label_visibility="collapsed")
-                with c2: 
-                    type_options_list = ["買進", "賣出", "Sell Put", "Covered Call", "配息"]
-                    current_type_idx = type_options_list.index(row["type"]) if row["type"] in type_options_list else 0
-                    new_type = st.selectbox("動作", type_options_list, index=current_type_idx, key=f"ed_t_{row['id']}", label_visibility="collapsed")
-                with c3:
-                    cc1, cc2 = st.columns([1.5, 1])
-                    new_name = cc1.text_input("名稱", value=row["name"], key=f"ed_n_{row['id']}", label_visibility="collapsed")
-                    new_ticker = cc2.text_input("代號", value=row["ticker"], key=f"ed_tk_{row['id']}", label_visibility="collapsed")
-                with c4:
-                    cc1, cc2 = st.columns(2)
-                    new_qty = cc1.text_input("數量", value=str(row["quantity"]), key=f"ed_q_{row['id']}", label_visibility="collapsed")
-                    new_price = cc2.text_input("價格", value=str(row["price"]), key=f"ed_p_{row['id']}", label_visibility="collapsed")
-                with c5: new_curr = st.selectbox("幣別", ["TWD", "USD"], index=0 if row["currency"]=="TWD" else 1, key=f"ed_c_{row['id']}", label_visibility="collapsed")
-                with c6: new_note = st.text_input("備註", value=row.get("note", ""), key=f"ed_nt_{row['id']}", label_visibility="collapsed")
-                
-                created_at_str = str(row.get('created_at', ''))[:10] if row.get('created_at') else ''
-                with c7: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{created_at_str}</div>", unsafe_allow_html=True)
-                
-                with c8:
-                    b1, b2 = st.columns([0.9, 0.9])
-                    if b1.button("儲存", key=f"save_tx_{row['id']}", type="primary", use_container_width=True):
-                        for idx, t in enumerate(st.session_state.transactions):
-                            if t["id"] == row["id"]:
-                                st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr, "note": new_note})
-                                break
-                        save_data("transactions", st.session_state.transactions)
-                        st.session_state.editing_id = None
-                        fetch_all_prices.clear()
-                        st.rerun()
-                    if b2.button("取消", key=f"cancel_tx_{row['id']}", use_container_width=True):
-                        st.session_state.editing_id = None
-                        st.rerun()
-            else:
-                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
-                if st.session_state.privacy_mode:
-                    qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
-                else:
-                    qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
-                    price_display = fmt(row['price'])
+        if isinstance(date_range, tuple):
+            if len(date_range) == 2: tx_df = tx_df[(tx_df["date_obj"] >= date_range[0]) & (tx_df["date_obj"] <= date_range[1])]
+            elif len(date_range) == 1: tx_df = tx_df[tx_df["date_obj"] == date_range[0]]
+        if selected_target != "全部": tx_df = tx_df[tx_df["target_label"] == selected_target]
+        if action_filter != "全部": tx_df = tx_df[tx_df["type"] == action_filter]
+        st.caption(f"共找到 {len(tx_df)} 筆紀錄")
+
+        def render_tx_rows(df_to_render):
+            for i, row in df_to_render.iterrows():
+                if st.session_state.editing_id == row["id"]:
+                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
+                    with c1: new_date = st.date_input("日期", value=date.fromisoformat(row["date"]), key=f"ed_d_{row['id']}", label_visibility="collapsed")
+                    with c2: 
+                        type_options_list = ["買進", "賣出", "Sell Put", "Covered Call", "配息"]
+                        current_type_idx = type_options_list.index(row["type"]) if row["type"] in type_options_list else 0
+                        new_type = st.selectbox("動作", type_options_list, index=current_type_idx, key=f"ed_t_{row['id']}", label_visibility="collapsed")
+                    with c3:
+                        cc1, cc2 = st.columns([1.5, 1])
+                        new_name = cc1.text_input("名稱", value=row["name"], key=f"ed_n_{row['id']}", label_visibility="collapsed")
+                        new_ticker = cc2.text_input("代號", value=row["ticker"], key=f"ed_tk_{row['id']}", label_visibility="collapsed")
+                    with c4:
+                        cc1, cc2 = st.columns(2)
+                        new_qty = cc1.text_input("數量", value=str(row["quantity"]), key=f"ed_q_{row['id']}", label_visibility="collapsed")
+                        new_price = cc2.text_input("價格", value=str(row["price"]), key=f"ed_p_{row['id']}", label_visibility="collapsed")
+                    with c5: new_curr = st.selectbox("幣別", ["TWD", "USD"], index=0 if row["currency"]=="TWD" else 1, key=f"ed_c_{row['id']}", label_visibility="collapsed")
+                    with c6: new_note = st.text_input("備註", value=row.get("note", ""), key=f"ed_nt_{row['id']}", label_visibility="collapsed")
                     
-                with c1: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['date']}</div>", unsafe_allow_html=True)
-                with c2: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['type']}</div>", unsafe_allow_html=True)
-                with c3: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['name']}（{row['ticker']}）</div>", unsafe_allow_html=True)
-                with c4: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{qty_display} × {price_display}</div>", unsafe_allow_html=True)
-                with c5: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['currency']}</div>", unsafe_allow_html=True)
-                with c6: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row.get('note', '')}</div>", unsafe_allow_html=True)
-                
-                created_at_str = str(row.get('created_at', ''))[:10] if row.get('created_at') else ''
-                with c7: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px; color:#94a3b8; font-size:13px;'>{created_at_str}</div>", unsafe_allow_html=True)
-                
-                with c8:
-                    b1, b2 = st.columns([0.9, 0.9])
-                    if b1.button("編輯", key=f"edit_{row['id']}"):
-                        st.session_state.editing_id = row["id"]
-                        st.rerun()
-                    if b2.button("刪除", key=f"del_{row['id']}"):
-                        st.session_state.transactions = [t for t in st.session_state.transactions if t["id"] != row["id"]]
-                        save_data("transactions", st.session_state.transactions)
-                        st.success("已刪除")
-                        fetch_all_prices.clear()
-                        st.rerun()
+                    created_at_str = str(row.get('created_at', ''))[:10] if row.get('created_at') else ''
+                    with c7: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{created_at_str}</div>", unsafe_allow_html=True)
+                    
+                    with c8:
+                        b1, b2 = st.columns([0.9, 0.9])
+                        if b1.button("儲存", key=f"save_tx_{row['id']}", type="primary", use_container_width=True):
+                            for idx, t in enumerate(st.session_state.transactions):
+                                if t["id"] == row["id"]:
+                                    st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr, "note": new_note})
+                                    break
+                            save_data("transactions", st.session_state.transactions)
+                            st.session_state.editing_id = None
+                            fetch_all_prices.clear()
+                            st.rerun()
+                        if b2.button("取消", key=f"cancel_tx_{row['id']}", use_container_width=True):
+                            st.session_state.editing_id = None
+                            st.rerun()
+                else:
+                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
+                    if st.session_state.privacy_mode:
+                        qty_display, price_display = "＊＊＊＊", "＊＊＊＊"
+                    else:
+                        qty_display = format_dynamic_qty(row['quantity'], row['price'], row['currency'])
+                        price_display = fmt(row['price'])
+                        
+                    with c1: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['date']}</div>", unsafe_allow_html=True)
+                    with c2: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['type']}</div>", unsafe_allow_html=True)
+                    with c3: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['name']}（{row['ticker']}）</div>", unsafe_allow_html=True)
+                    with c4: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{qty_display} × {price_display}</div>", unsafe_allow_html=True)
+                    with c5: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row['currency']}</div>", unsafe_allow_html=True)
+                    with c6: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px;'>{row.get('note', '')}</div>", unsafe_allow_html=True)
+                    
+                    created_at_str = str(row.get('created_at', ''))[:10] if row.get('created_at') else ''
+                    with c7: st.markdown(f"<div style='text-align:center; line-height:1.2; margin-top:8px; color:#94a3b8; font-size:13px;'>{created_at_str}</div>", unsafe_allow_html=True)
+                    
+                    with c8:
+                        b1, b2 = st.columns([0.9, 0.9])
+                        if b1.button("編輯", key=f"edit_{row['id']}"):
+                            st.session_state.editing_id = row["id"]
+                            st.rerun()
+                        if b2.button("刪除", key=f"del_{row['id']}"):
+                            st.session_state.transactions = [t for t in st.session_state.transactions if t["id"] != row["id"]]
+                            save_data("transactions", st.session_state.transactions)
+                            st.success("已刪除")
+                            fetch_all_prices.clear()
+                            st.rerun()
 
-    if not tx_df.empty:
-        h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
-        h1.markdown("<div style='text-align:center'><b>交易日期</b></div>", unsafe_allow_html=True)
-        h2.markdown("<div style='text-align:center'><b>動作</b></div>", unsafe_allow_html=True)
-        h3.markdown("<div style='text-align:center'><b>標的</b></div>", unsafe_allow_html=True)
-        h4.markdown("<div style='text-align:center'><b>明細</b></div>", unsafe_allow_html=True)
-        h5.markdown("<div style='text-align:center'><b>幣別</b></div>", unsafe_allow_html=True)
-        h6.markdown("<div style='text-align:center'><b>備註</b></div>", unsafe_allow_html=True)
-        h7.markdown("<div style='text-align:center'><b>登錄日期</b></div>", unsafe_allow_html=True)
-        h8.markdown("")
-        render_tx_rows(tx_df.head(20))
-        if len(tx_df) > 20:
-            with st.expander(f"展開顯示其餘 {len(tx_df) - 20} 筆紀錄..."): render_tx_rows(tx_df.iloc[20:])
-    else: st.info("沒有符合條件的紀錄。")
+        if not tx_df.empty:
+            h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([0.9, 0.6, 1.3, 1.2, 0.5, 1.0, 0.9, 1.1])
+            h1.markdown("<div style='text-align:center'><b>交易日期</b></div>", unsafe_allow_html=True)
+            h2.markdown("<div style='text-align:center'><b>動作</b></div>", unsafe_allow_html=True)
+            h3.markdown("<div style='text-align:center'><b>標的</b></div>", unsafe_allow_html=True)
+            h4.markdown("<div style='text-align:center'><b>明細</b></div>", unsafe_allow_html=True)
+            h5.markdown("<div style='text-align:center'><b>幣別</b></div>", unsafe_allow_html=True)
+            h6.markdown("<div style='text-align:center'><b>備註</b></div>", unsafe_allow_html=True)
+            h7.markdown("<div style='text-align:center'><b>登錄日期</b></div>", unsafe_allow_html=True)
+            h8.markdown("")
+            render_tx_rows(tx_df.head(20))
+            if len(tx_df) > 20:
+                with st.expander(f"展開顯示其餘 {len(tx_df) - 20} 筆紀錄..."): render_tx_rows(tx_df.iloc[20:])
+        else: st.info("沒有符合條件的紀錄。")
 else: st.caption("尚無交易紀錄")
 
 st.divider()
