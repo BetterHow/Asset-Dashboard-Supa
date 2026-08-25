@@ -182,11 +182,12 @@ def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
         fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp
     ))
     if dates:
+        dtick_val = 86400000 if len(dates) <= 40 else None
         today_dt = pd.to_datetime(date.today())
         start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
             hovermode="x unified", dragmode="pan"
         )
@@ -214,11 +215,12 @@ def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
         fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp
     ))
     if dates:
+        dtick_val = 86400000 if len(dates) <= 40 else None
         today_dt = pd.to_datetime(date.today())
         start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
             hovermode="x unified", dragmode="pan"
         )
@@ -256,7 +258,8 @@ def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts,
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
     
-    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+    dtick_val = 86400000 if len(fdf_dates) <= 40 else None
+    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", type="date", dtick=dtick_val), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
     return fig
 
 @st.cache_data(show_spinner=False)
@@ -319,9 +322,30 @@ def calculate_holdings(transactions):
         
         if action in ["Sell Put", "Covered Call", "配息"]:
             amount = price if qty == 0 else qty * price
-            if action == "Covered Call": h["CC權利金"] += amount; h["已實現損益"] += amount
-            elif action == "Sell Put": h["SP權利金"] += amount; h["已實現損益"] += amount
-            elif action == "配息": h["股息"] += amount; h["已實現損益"] += amount
+            if action == "Covered Call": 
+                h["CC權利金"] += amount; h["已實現損益"] += amount
+            elif action == "Sell Put": 
+                h["SP權利金"] += amount; h["已實現損益"] += amount
+            elif action == "配息": 
+                h["股息"] += amount; h["已實現損益"] += amount
+                # 🟢 修正：處理配發股票或加密貨幣質押利息（有數量，金額可為 0 或大於 0）
+                if qty > 0:
+                    h["歷史買進數量"] += qty
+                    if h["數量"] >= 0: 
+                        new_qty = h["數量"] + qty
+                        h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / new_qty if new_qty > 0 else 0
+                        h["數量"] = new_qty
+                    else: 
+                        cover_qty = min(qty, abs(h["數量"]))
+                        h["已實現損益"] += (h["avg_cost"] - price) * cover_qty 
+                        h["數量"] += cover_qty
+                        remaining_buy = qty - cover_qty
+                        if remaining_buy > 0: 
+                            h["數量"] = remaining_buy
+                            h["avg_cost"] = price
+                        elif abs(h["數量"]) < 1e-5:
+                            h["數量"] = 0.0
+                            h["avg_cost"] = 0.0
             continue
 
         if action == "買進":
@@ -1022,7 +1046,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                 if not fdf.empty:
                     sv, ev = fdf['Value'].iloc[0], fdf['Value'].iloc[-1]
                     cv = ev - sv
-                    cp_str = "∞%" if abs(sv)<1e-5 and cv>0 else "0.00%" if abs(sv)<1e-5 and cv<=0 else f"{(tc_val/abs(pnv)*100):.2f}%"
+                    cp_str = "∞%" if abs(sv)<1e-5 and cv>0 else "0.00%" if abs(sv)<1e-5 and cv<=0 else f"{(cv/abs(sv)*100):.2f}%"
                     if privacy: st.markdown("<div style='text-align:right; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
                     else:
                         c_clr = "#4ade80" if cv>0 else "#ef4444" if cv<0 else "#94a3b8"
@@ -1314,7 +1338,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        # 🟢 新增：將「配息」顯示在價格走勢圖上
                         divs = atx[atx['type'] == '配息'].copy()
                         if not divs.empty:
                             divs['hover'] = divs.apply(mk_hover, axis=1)
