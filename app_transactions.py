@@ -5,6 +5,7 @@ import yfinance as yf
 from datetime import datetime, date, timedelta
 import json
 import re
+import os  # 🟢 新增：用於處理本地端記住帳號的檔案
 import concurrent.futures
 import hashlib
 import base64
@@ -80,11 +81,35 @@ if st.session_state.user is None:
     with col2:
         tab_login, tab_reg = st.tabs(["登入", "註冊新帳號"])
         with tab_login:
-            login_email = st.text_input("Email", key="l_email")
+            # 🟢 新增：讀取本地端記憶的帳號
+            saved_email = ""
+            try:
+                if os.path.exists("remembered_email.txt"):
+                    with open("remembered_email.txt", "r", encoding="utf-8") as f:
+                        saved_email = f.read().strip()
+            except Exception:
+                pass
+                
+            login_email = st.text_input("Email", value=saved_email, key="l_email")
             login_pwd = st.text_input("密碼", type="password", key="l_pwd")
+            # 🟢 新增：記住帳號選項，若原本有紀錄則預設打勾
+            remember_me = st.checkbox("記住帳號", value=bool(saved_email))
+            
             if st.button("登入金庫", use_container_width=True, type="primary"):
                 try:
                     res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pwd})
+                    
+                    # 🟢 新增：成功登入後，依據勾選狀態儲存或清除本地帳號紀錄
+                    try:
+                        if remember_me:
+                            with open("remembered_email.txt", "w", encoding="utf-8") as f:
+                                f.write(login_email.strip())
+                        else:
+                            if os.path.exists("remembered_email.txt"):
+                                os.remove("remembered_email.txt")
+                    except Exception:
+                        pass
+                        
                     st.session_state.user, st.session_state.password = res.user, login_pwd
                     st.rerun()
                 except Exception: st.error("登入失敗，請確認帳號密碼是否正確。")
@@ -182,12 +207,11 @@ def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
         fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp
     ))
     if dates:
-        dtick_val = 86400000 if len(dates) <= 40 else None
         today_dt = pd.to_datetime(date.today())
         start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
             hovermode="x unified", dragmode="pan"
         )
@@ -215,12 +239,11 @@ def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
         fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp
     ))
     if dates:
-        dtick_val = 86400000 if len(dates) <= 40 else None
         today_dt = pd.to_datetime(date.today())
         start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date", dtick=dtick_val),
+            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
             yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
             hovermode="x unified", dragmode="pan"
         )
@@ -258,8 +281,7 @@ def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts,
     fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
     fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
     
-    dtick_val = 86400000 if len(fdf_dates) <= 40 else None
-    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", type="date", dtick=dtick_val), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
     return fig
 
 @st.cache_data(show_spinner=False)
@@ -322,13 +344,10 @@ def calculate_holdings(transactions):
         
         if action in ["Sell Put", "Covered Call", "配息"]:
             amount = price if qty == 0 else qty * price
-            if action == "Covered Call": 
-                h["CC權利金"] += amount; h["已實現損益"] += amount
-            elif action == "Sell Put": 
-                h["SP權利金"] += amount; h["已實現損益"] += amount
+            if action == "Covered Call": h["CC權利金"] += amount; h["已實現損益"] += amount
+            elif action == "Sell Put": h["SP權利金"] += amount; h["已實現損益"] += amount
             elif action == "配息": 
                 h["股息"] += amount; h["已實現損益"] += amount
-                # 🟢 修正：處理配發股票或加密貨幣質押利息（有數量，金額可為 0 或大於 0）
                 if qty > 0:
                     h["歷史買進數量"] += qty
                     if h["數量"] >= 0: 
@@ -522,11 +541,6 @@ st.divider()
 # 側邊欄
 with st.sidebar:
     st.title("📊 個人資產儀表板")
-    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
-    if st.button("登出金庫", use_container_width=True):
-        supabase.auth.sign_out()
-        st.session_state.user, st.session_state.password = None, None
-        st.cache_data.clear(); st.rerun()
     st.divider()
     
     st.header("新增交易")
