@@ -541,6 +541,7 @@ with st.sidebar:
     st.title("📊 個人資產儀表板")
     st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
     if st.button("登出金庫", use_container_width=True):
+        supabase.auth.sign_out()
         st.session_state.user, st.session_state.password = None, None
         st.cache_data.clear(); st.rerun()
     st.divider()
@@ -554,7 +555,7 @@ with st.sidebar:
 
     action = st.selectbox("交易類型", ["買進", "賣出", "Sell Put", "Covered Call", "配息"])
 
-    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鴻海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
+    TW_MAP = {"元大台灣50":"0050", "元大高股息":"0056", "富邦台50":"006208", "國泰永續高股息":"00878", "群益台灣精選高息":"00919", "復華台灣科技優息":"00929", "元大台灣價值高息":"00940", "元大美債20年":"00679B", "國泰20年美債":"00687B", "群益ESG投等債20+":"00937B", "台積電":"2330", "鸿海":"2317", "聯發科":"2454", "廣達":"2382", "富邦金":"2881", "國泰金":"2882"}
     
     user_name_to_ticker = {}
     user_ticker_to_name = {}
@@ -1344,6 +1345,12 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                         
                         def mk_hover(r): return "＊＊＊＊" if privacy else f"日期: {r['date']}<br>動作: {r['type']}<br>價格: {r['price']}<br>數量: {r['quantity']}<br>備註: {r.get('note', '')}"
                         
+                        # 🟢 修正：將取 Y 軸位置的函式移到外層，讓 SP、CC 都能共用，避免該標的沒有配息時引發 NameError
+                        def get_y_pos(d, p):
+                            if d in ddf.index and pd.notna(ddf.loc[d, 'Close']):
+                                return ddf.loc[d, 'Close']
+                            return p
+
                         if not buys.empty:
                             buys['hover'] = buys.apply(mk_hover, axis=1)
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in buys['quantity']]
@@ -1357,25 +1364,19 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                         divs = atx[atx['type'] == '配息'].copy()
                         if not divs.empty:
                             divs['hover'] = divs.apply(mk_hover, axis=1)
-                            def get_div_y(d, p):
-                                if d in ddf.index and pd.notna(ddf.loc[d, 'Close']):
-                                    return ddf.loc[d, 'Close']
-                                return p
-                            divs['y_pos'] = divs.apply(lambda r: get_div_y(r['date_obj'], r['price']), axis=1)
+                            divs['y_pos'] = divs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=divs['date_obj'], y=divs['y_pos'], mode='markers', name='配息', marker=dict(color='#f59e0b', size=12, symbol='star', line=dict(width=1, color='white')), customdata=divs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        # 🟢 新增：將 SP (Sell Put) 顯示在價格走勢圖上
                         sps = atx[atx['type'] == 'Sell Put'].copy()
                         if not sps.empty:
                             sps['hover'] = sps.apply(mk_hover, axis=1)
-                            sps['y_pos'] = sps.apply(lambda r: get_div_y(r['date_obj'], r['price']), axis=1)
+                            sps['y_pos'] = sps.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=sps['date_obj'], y=sps['y_pos'], mode='markers', name='Sell Put', marker=dict(color='#8b5cf6', size=12, symbol='triangle-up', line=dict(width=1, color='white')), customdata=sps['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        # 🟢 新增：將 CC (Covered Call) 顯示在價格走勢圖上
                         ccs = atx[atx['type'] == 'Covered Call'].copy()
                         if not ccs.empty:
                             ccs['hover'] = ccs.apply(mk_hover, axis=1)
-                            ccs['y_pos'] = ccs.apply(lambda r: get_div_y(r['date_obj'], r['price']), axis=1)
+                            ccs['y_pos'] = ccs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=ccs['date_obj'], y=ccs['y_pos'], mode='markers', name='Covered Call', marker=dict(color='#ec4899', size=12, symbol='triangle-down', line=dict(width=1, color='white')), customdata=ccs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
                         fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
