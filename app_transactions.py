@@ -5,7 +5,7 @@ import yfinance as yf
 from datetime import datetime, date, timedelta
 import json
 import re
-import os  # 🟢 新增：用於處理本地端記住帳號的檔案
+import os
 import concurrent.futures
 import hashlib
 import base64
@@ -81,7 +81,6 @@ if st.session_state.user is None:
     with col2:
         tab_login, tab_reg = st.tabs(["登入", "註冊新帳號"])
         with tab_login:
-            # 🟢 新增：讀取本地端記憶的帳號
             saved_email = ""
             try:
                 if os.path.exists("remembered_email.txt"):
@@ -92,14 +91,11 @@ if st.session_state.user is None:
                 
             login_email = st.text_input("Email", value=saved_email, key="l_email")
             login_pwd = st.text_input("密碼", type="password", key="l_pwd")
-            # 🟢 新增：記住帳號選項，若原本有紀錄則預設打勾
             remember_me = st.checkbox("記住帳號", value=bool(saved_email))
             
             if st.button("登入金庫", use_container_width=True, type="primary"):
                 try:
                     res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pwd})
-                    
-                    # 🟢 新增：成功登入後，依據勾選狀態儲存或清除本地帳號紀錄
                     try:
                         if remember_me:
                             with open("remembered_email.txt", "w", encoding="utf-8") as f:
@@ -344,8 +340,10 @@ def calculate_holdings(transactions):
         
         if action in ["Sell Put", "Covered Call", "配息"]:
             amount = price if qty == 0 else qty * price
-            if action == "Covered Call": h["CC權利金"] += amount; h["已實現損益"] += amount
-            elif action == "Sell Put": h["SP權利金"] += amount; h["已實現損益"] += amount
+            if action == "Covered Call": 
+                h["CC權利金"] += amount; h["已實現損益"] += amount
+            elif action == "Sell Put": 
+                h["SP權利金"] += amount; h["已實現損益"] += amount
             elif action == "配息": 
                 h["股息"] += amount; h["已實現損益"] += amount
                 if qty > 0:
@@ -541,6 +539,10 @@ st.divider()
 # 側邊欄
 with st.sidebar:
     st.title("📊 個人資產儀表板")
+    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
+    if st.button("登出金庫", use_container_width=True):
+        st.session_state.user, st.session_state.password = None, None
+        st.cache_data.clear(); st.rerun()
     st.divider()
     
     st.header("新增交易")
@@ -1361,6 +1363,20 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                                 return p
                             divs['y_pos'] = divs.apply(lambda r: get_div_y(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=divs['date_obj'], y=divs['y_pos'], mode='markers', name='配息', marker=dict(color='#f59e0b', size=12, symbol='star', line=dict(width=1, color='white')), customdata=divs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
+
+                        # 🟢 新增：將 SP (Sell Put) 顯示在價格走勢圖上
+                        sps = atx[atx['type'] == 'Sell Put'].copy()
+                        if not sps.empty:
+                            sps['hover'] = sps.apply(mk_hover, axis=1)
+                            sps['y_pos'] = sps.apply(lambda r: get_div_y(r['date_obj'], r['price']), axis=1)
+                            fig2.add_trace(go.Scatter(x=sps['date_obj'], y=sps['y_pos'], mode='markers', name='Sell Put', marker=dict(color='#8b5cf6', size=12, symbol='triangle-up', line=dict(width=1, color='white')), customdata=sps['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
+
+                        # 🟢 新增：將 CC (Covered Call) 顯示在價格走勢圖上
+                        ccs = atx[atx['type'] == 'Covered Call'].copy()
+                        if not ccs.empty:
+                            ccs['hover'] = ccs.apply(mk_hover, axis=1)
+                            ccs['y_pos'] = ccs.apply(lambda r: get_div_y(r['date_obj'], r['price']), axis=1)
+                            fig2.add_trace(go.Scatter(x=ccs['date_obj'], y=ccs['y_pos'], mode='markers', name='Covered Call', marker=dict(color='#ec4899', size=12, symbol='triangle-down', line=dict(width=1, color='white')), customdata=ccs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
                         fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
