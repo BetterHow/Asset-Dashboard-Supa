@@ -541,6 +541,7 @@ with st.sidebar:
     st.title("📊 個人資產儀表板")
     st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
     if st.button("登出金庫", use_container_width=True):
+        supabase.auth.sign_out()
         st.session_state.user, st.session_state.password = None, None
         st.cache_data.clear(); st.rerun()
     st.divider()
@@ -730,7 +731,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                 reverse=True
             )
             for acc in sorted_cash_accounts:
-                # 🟢 防呆：為舊帳戶補齊 history 結構
                 if "history" not in acc:
                     acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "初始", "amount": acc["balance"], "note": "系統升級預設"}]
 
@@ -790,7 +790,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                         save_data("cash_accounts", st.session_state.cash_accounts)
                         st.rerun()
 
-                # 🟢 歷史紀錄顯示區塊
                 hist = acc.get("history", [])
                 if hist:
                     with st.expander("⏳ 歷次異動紀錄", expanded=False):
@@ -966,7 +965,7 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     if c4.button("編輯", key=f"edit_lib_{acc['id']}", use_container_width=True):
                         st.session_state.edit_liability_id = acc["id"]
                         st.rerun()
-                    if c5.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
+                    if c4.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
                         st.session_state.liabilities_accounts = [a for a in st.session_state.liabilities_accounts if a["id"] != acc["id"]]
                         save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                         st.rerun()
@@ -1216,7 +1215,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                     elif abs(cost) <= 1e-5 and pnl <= 0: return "0.00%"
                     pct = (pnl / abs(cost) * 100) if abs(cost) > 0 else 0
                     if pnl < 0: return f"<span style='color:#ef4444'>-{abs(pct):.2f}%</span>"
-                    elif pnl > 0: return fspan style='color:#4ade80'>+{pct:.2f}%</span>"
+                    elif pnl > 0: return f"<span style='color:#4ade80'>+{pct:.2f}%</span>"
                     else: return "0.00%"
 
                 fdf['pnl_val_text'] = fdf['PnL'].apply(get_val_text_global)
