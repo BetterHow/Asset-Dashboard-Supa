@@ -541,7 +541,6 @@ with st.sidebar:
     st.title("📊 個人資產儀表板")
     st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
     if st.button("登出金庫", use_container_width=True):
-        supabase.auth.sign_out()
         st.session_state.user, st.session_state.password = None, None
         st.cache_data.clear(); st.rerun()
     st.divider()
@@ -632,6 +631,14 @@ with st.sidebar:
             save_data("transactions", st.session_state.transactions)
             fetch_all_prices.clear(); st.rerun()
         else: st.warning("請正確填寫數量與價格。")
+
+def format_hist_row(r, privacy):
+    sign = "+" if r['action'] in ["增加", "建立"] else "-" if r['action'] == "減少" else ""
+    raw_amt = f"{sign}{r['amount']:,.2f}" if r['amount'] % 1 != 0 else f"{sign}{r['amount']:,.0f}"
+    amt_str = "＊＊＊＊" if privacy else raw_amt
+    action_color = "#4ade80" if r['action'] in ["增加", "建立"] else "#ef4444" if r['action'] == "減少" else "#e2e8f0"
+    note_str = f"<span style='color:#94a3b8; font-size:14px;'>{r['note']}</span>" if r.get('note') else ""
+    return f"<div style='margin-bottom:4px;'>🗓️ <span style='color:#94a3b8; font-size:14px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b> {note_str}</div>"
 
 c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
 with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
@@ -775,41 +782,38 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                         st.session_state.adjust_cash_id = None
                         st.rerun()
                 else:
-                    c1, c2, c3, c4, c5 = st.columns([3.0, 4.0, 1.0, 0.8, 0.8])
-                    c1.markdown(f"<div style='font-size:19px; font-weight:bold; margin-top:4px;'>{acc['name']}</div>", unsafe_allow_html=True)
+                    c_main, c_adj, c_edit, c_del = st.columns([5.5, 1.2, 1.2, 1.2])
                     bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
-                    c2.markdown(f"<div style='font-size:19px; margin-top:4px;'>{acc['currency']} {mask_val(bal_str)}</div>", unsafe_allow_html=True)
-                    if c3.button("調整", key=f"adj_c_{acc['id']}", use_container_width=True):
-                        st.session_state.adjust_cash_id = acc["id"]
-                        st.rerun()
-                    if c4.button("編輯", key=f"edit_c_{acc['id']}", use_container_width=True):
-                        st.session_state.edit_cash_id = acc["id"]
-                        st.rerun()
-                    if c5.button("刪除", key=f"del_c_{acc['id']}", use_container_width=True):
-                        st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
-                        save_data("cash_accounts", st.session_state.cash_accounts)
-                        st.rerun()
-
-                hist = acc.get("history", [])
-                if hist:
-                    with st.expander("⏳ 歷次異動紀錄", expanded=False):
-                        hist_df = pd.DataFrame(hist).sort_values("date", ascending=False).reset_index(drop=True)
-                        
-                        def format_hist_row(r, privacy):
-                            sign = "+" if r['action'] in ["增加", "建立"] else "-" if r['action'] == "減少" else ""
-                            raw_amt = f"{sign}{r['amount']:,.2f}" if r['amount'] % 1 != 0 else f"{sign}{r['amount']:,.0f}"
-                            amt_str = "＊＊＊＊" if privacy else raw_amt
-                            action_color = "#4ade80" if r['action'] in ["增加", "建立"] else "#ef4444" if r['action'] == "減少" else "#e2e8f0"
-                            note_str = f"<span style='color:#94a3b8; font-size:14px;'>{r['note']}</span>" if r.get('note') else ""
-                            return f"<div style='margin-bottom:4px;'>🗓️ <span style='color:#94a3b8; font-size:14px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b> {note_str}</div>"
-
-                        for _, r in hist_df.head(5).iterrows():
-                            st.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
-                        
-                        if len(hist_df) > 5:
-                            with st.expander(f"展開其餘 {len(hist_df)-5} 筆紀錄..."):
-                                for _, r in hist_df.iloc[5:].iterrows():
+                    
+                    with c_main:
+                        with st.expander(f"🏦 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
+                            hist = acc.get("history", [])
+                            if hist:
+                                hist_df = pd.DataFrame(hist).sort_values("date", ascending=False).reset_index(drop=True)
+                                for _, r in hist_df.head(5).iterrows():
                                     st.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
+                                
+                                if len(hist_df) > 5:
+                                    with st.expander(f"展開其餘 {len(hist_df)-5} 筆紀錄..."):
+                                        for _, r in hist_df.iloc[5:].iterrows():
+                                            st.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
+                            else:
+                                st.caption("尚無異動紀錄")
+
+                    with c_adj:
+                        if st.button("調整", key=f"adj_c_{acc['id']}", use_container_width=True):
+                            st.session_state.adjust_cash_id = acc["id"]
+                            st.rerun()
+                    with c_edit:
+                        if st.button("編輯", key=f"edit_c_{acc['id']}", use_container_width=True):
+                            st.session_state.edit_cash_id = acc["id"]
+                            st.rerun()
+                    with c_del:
+                        if st.button("刪除", key=f"del_c_{acc['id']}", use_container_width=True):
+                            st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
+                            save_data("cash_accounts", st.session_state.cash_accounts)
+                            st.rerun()
+
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
             st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
@@ -955,42 +959,38 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                         st.session_state.adjust_liability_id = None
                         st.rerun()
                 else:
-                    c1, c2, c3, c4, c5 = st.columns([3.0, 4.0, 1.0, 0.8, 0.8])
-                    c1.markdown(f"<div style='font-size:19px; font-weight:bold; margin-top:4px;'>{acc['name']}</div>", unsafe_allow_html=True)
+                    c_main, c_adj, c_edit, c_del = st.columns([5.5, 1.2, 1.2, 1.2])
                     bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
-                    c2.markdown(f"<div style='font-size:19px; margin-top:4px;'>{acc['currency']} {mask_val(bal_str)}</div>", unsafe_allow_html=True)
-                    if c3.button("調整", key=f"adj_lib_{acc['id']}", use_container_width=True):
-                        st.session_state.adjust_liability_id = acc["id"]
-                        st.rerun()
-                    if c4.button("編輯", key=f"edit_lib_{acc['id']}", use_container_width=True):
-                        st.session_state.edit_liability_id = acc["id"]
-                        st.rerun()
-                    if c4.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
-                        st.session_state.liabilities_accounts = [a for a in st.session_state.liabilities_accounts if a["id"] != acc["id"]]
-                        save_data("liabilities_accounts", st.session_state.liabilities_accounts)
-                        st.rerun()
-
-                # 🟢 歷史紀錄顯示區塊
-                hist = acc.get("history", [])
-                if hist:
-                    with st.expander("⏳ 歷次異動紀錄", expanded=False):
-                        hist_df = pd.DataFrame(hist).sort_values("date", ascending=False).reset_index(drop=True)
-                        
-                        def format_hist_row(r, privacy):
-                            sign = "+" if r['action'] in ["增加", "建立"] else "-" if r['action'] == "減少" else ""
-                            raw_amt = f"{sign}{r['amount']:,.2f}" if r['amount'] % 1 != 0 else f"{sign}{r['amount']:,.0f}"
-                            amt_str = "＊＊＊＊" if privacy else raw_amt
-                            action_color = "#4ade80" if r['action'] in ["增加", "建立"] else "#ef4444" if r['action'] == "減少" else "#e2e8f0"
-                            note_str = f"<span style='color:#94a3b8; font-size:14px;'>{r['note']}</span>" if r.get('note') else ""
-                            return f"<div style='margin-bottom:4px;'>🗓️ <span style='color:#94a3b8; font-size:14px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b> {note_str}</div>"
-
-                        for _, r in hist_df.head(5).iterrows():
-                            st.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
-                        
-                        if len(hist_df) > 5:
-                            with st.expander(f"展開其餘 {len(hist_df)-5} 筆紀錄..."):
-                                for _, r in hist_df.iloc[5:].iterrows():
+                    
+                    with c_main:
+                        with st.expander(f"💳 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
+                            hist = acc.get("history", [])
+                            if hist:
+                                hist_df = pd.DataFrame(hist).sort_values("date", ascending=False).reset_index(drop=True)
+                                for _, r in hist_df.head(5).iterrows():
                                     st.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
+                                
+                                if len(hist_df) > 5:
+                                    with st.expander(f"展開其餘 {len(hist_df)-5} 筆紀錄..."):
+                                        for _, r in hist_df.iloc[5:].iterrows():
+                                            st.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
+                            else:
+                                st.caption("尚無異動紀錄")
+
+                    with c_adj:
+                        if st.button("調整", key=f"adj_lib_{acc['id']}", use_container_width=True):
+                            st.session_state.adjust_liability_id = acc["id"]
+                            st.rerun()
+                    with c_edit:
+                        if st.button("編輯", key=f"edit_lib_{acc['id']}", use_container_width=True):
+                            st.session_state.edit_liability_id = acc["id"]
+                            st.rerun()
+                    with c_del:
+                        if st.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
+                            st.session_state.liabilities_accounts = [a for a in st.session_state.liabilities_accounts if a["id"] != acc["id"]]
+                            save_data("liabilities_accounts", st.session_state.liabilities_accounts)
+                            st.rerun()
+
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
             st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
