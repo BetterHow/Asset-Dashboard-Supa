@@ -122,7 +122,14 @@ if st.session_state.user is None:
 # ========================================================
 # 📊 正式 App 初始化與狀態管理
 # ========================================================
-st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; } .js-plotly-plot .plotly .nsewdrag, .js-plotly-plot .plotly .ewdrag, .js-plotly-plot .plotly .nsdrag, .js-plotly-plot .plotly .cursor-crosshair, .js-plotly-plot .plotly .cursor-move { cursor: default !important; }</style>""", unsafe_allow_html=True)
+# 🟢 新增：將下拉選單(st.expander)的標題字體統一放大並加粗
+st.markdown("""<style>
+section[data-testid="stSidebar"] > div:first-child { overflow-y: auto; } 
+div[data-testid="collapsedControl"], button[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 10px !important; z-index: 999999; } 
+div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; } 
+.js-plotly-plot .plotly .nsewdrag, .js-plotly-plot .plotly .ewdrag, .js-plotly-plot .plotly .nsdrag, .js-plotly-plot .plotly .cursor-crosshair, .js-plotly-plot .plotly .cursor-move { cursor: default !important; }
+div[data-testid="stExpander"] details summary p { font-size: 18px !important; font-weight: 600 !important; }
+</style>""", unsafe_allow_html=True)
 
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
@@ -782,11 +789,11 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                         st.session_state.adjust_cash_id = None
                         st.rerun()
                 else:
-                    c_main, c_adj, c_edit, c_del = st.columns([5.5, 1.2, 1.2, 1.2])
+                    c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
                     bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
                     
                     with c_main:
-                        with st.expander(f"🏦 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
+                        with st.expander(f"**🏦 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}**", expanded=False):
                             hist = acc.get("history", [])
                             if hist:
                                 hist_df = pd.DataFrame(hist).sort_values("date", ascending=False).reset_index(drop=True)
@@ -959,11 +966,11 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                         st.session_state.adjust_liability_id = None
                         st.rerun()
                 else:
-                    c_main, c_adj, c_edit, c_del = st.columns([5.5, 1.2, 1.2, 1.2])
+                    c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
                     bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
                     
                     with c_main:
-                        with st.expander(f"💳 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
+                        with st.expander(f"**💳 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}**", expanded=False):
                             hist = acc.get("history", [])
                             if hist:
                                 hist_df = pd.DataFrame(hist).sort_values("date", ascending=False).reset_index(drop=True)
