@@ -130,7 +130,6 @@ div[data-testid="stTextInput"] div { padding-top: 0px; padding-bottom: 0px; }
 div[data-testid="stExpander"] details summary p { font-size: 22px !important; font-weight: bold !important; letter-spacing: 0.5px; }
 </style>""", unsafe_allow_html=True)
 
-# 支援保證金帳戶 (margin_accounts) 與 歷史編輯標記 (edit_hist_id)
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("margin_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
 
@@ -196,6 +195,71 @@ def fetch_all_prices(tickers: tuple):
             try: results[t] = future.result()
             except Exception: results[t] = None
     return results
+
+# ========================================================
+# 🚀 時光機：動態歷史快照回溯修補引擎
+# ========================================================
+def apply_history_patch(date_str, acc_type, acc_curr, balance_diff, cost_diff):
+    if not st.session_state.history_snapshots: return
+    if balance_diff == 0 and cost_diff == 0: return
+    
+    rate_to_twd = usd_twd if acc_curr == "USD" else 1.0
+    bal_diff_twd = balance_diff * rate_to_twd
+    cost_diff_twd = cost_diff * rate_to_twd
+    
+    target_date = date_str[:10]
+    
+    for snap_date, snap_data in st.session_state.history_snapshots.items():
+        if snap_date >= target_date:
+            if isinstance(snap_data, dict) and snap_data.get("version") == "v2":
+                for d_cur in ["TWD", "USD", "BTC"]:
+                    if d_cur in snap_data:
+                        factor = 1.0 if d_cur == "TWD" else (1.0 / usd_twd) if d_cur == "USD" else (1.0 / (btc_usd * usd_twd) if btc_usd else 1.0)
+                        
+                        c_bal_diff = bal_diff_twd * factor
+                        c_cost_diff = cost_diff_twd * factor
+                        
+                        if acc_type == "cash":
+                            snap_data[d_cur]["value"] += c_bal_diff
+                            snap_data[d_cur]["cost"] += c_cost_diff
+                            if "現金" not in snap_data[d_cur]["categories"]:
+                                snap_data[d_cur]["categories"]["現金"] = {"value": 0.0, "cost": 0.0}
+                            snap_data[d_cur]["categories"]["現金"]["value"] += c_bal_diff
+                            snap_data[d_cur]["categories"]["現金"]["cost"] += c_cost_diff
+                        elif acc_type == "margin":
+                            snap_data[d_cur]["value"] += c_bal_diff
+                            snap_data[d_cur]["cost"] += c_cost_diff
+                            if "期貨" not in snap_data[d_cur]["categories"]:
+                                snap_data[d_cur]["categories"]["期貨"] = {"value": 0.0, "cost": 0.0}
+                            snap_data[d_cur]["categories"]["期貨"]["value"] += c_bal_diff
+                            snap_data[d_cur]["categories"]["期貨"]["cost"] += c_cost_diff
+                        elif acc_type == "liabilities":
+                            snap_data[d_cur]["liability"] += c_bal_diff
+
+def get_impact(action, amount, cat_name):
+    bal_impact = 0
+    cost_impact = 0
+    if "更新權益數" in action:
+        bal_impact = amount
+        cost_impact = 0
+    elif action == '建立':
+        bal_impact = amount
+        cost_impact = amount
+    else:
+        abs_amt = abs(amount)
+        if "減少" in action or "出金" in action:
+            bal_impact = -abs_amt
+            cost_impact = -abs_amt if "出金" in action else 0
+        else:
+            bal_impact = abs_amt
+            cost_impact = abs_amt if "入金" in action else 0
+            
+    if cat_name == "cash":
+        cost_impact = bal_impact
+    elif cat_name == "liabilities":
+        cost_impact = 0
+        
+    return bal_impact, cost_impact
 
 # ========================================================
 # ⚡ 效能優化：Plotly 圖表建構快取
@@ -417,7 +481,7 @@ def calculate_holdings(transactions):
                 "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
                 "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
                 "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
-                "is_cash": False, "is_margin": False
+                "is_cash": False, "is_margin": False 
             })
     return result
 
@@ -627,12 +691,13 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
         st.session_state["price_input"] = str(get_latest_price(tv_str) or "") if len(tv_str)>=2 else ""
 
-    asset_type = st.selectbox("類型", ["台股", "美股", "期貨", "加密貨幣", "債券", "其他"], key="type_select")
+    asset_type = st.selectbox("類型", ["台股", "美股", "加密貨幣", "債券", "其他"], key="type_select")
     if asset_type != st.session_state.prev_type:
         st.session_state["currency_select"] = "USD" if asset_type in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_type = asset_type
@@ -707,10 +772,16 @@ def render_account_history(acc, category_name):
             if hb_col[0].button("✔️", key=f"hs_{category_name}_{acc['id']}_{true_idx}"):
                 new_a = safe_float(new_amt)
                 if new_a is not None:
+                    # 1. 計算舊資料影響並還原圖表快照
+                    old_action = r['action']
+                    old_amt_val = r['amount']
+                    old_bal_impact, old_cost_impact = get_impact(old_action, old_amt_val, category_name)
+                    apply_history_patch(r['date'], category_name, acc['currency'], -old_bal_impact, -old_cost_impact)
+                    
+                    # 2. 處理當下帳戶數值的改變
                     action = r['action']
                     balance_change = 0
                     cost_change = 0
-                    
                     if "更新權益數" in action:
                         old_target = r.get('_running_bal', 0)
                         balance_change = new_a - old_target
@@ -740,6 +811,10 @@ def render_account_history(acc, category_name):
                     r['date'] = new_date
                     r['note'] = new_note
                     
+                    # 3. 將新的影響補進圖表快照
+                    new_bal_impact, new_cost_impact = get_impact(r['action'], r['amount'], category_name)
+                    apply_history_patch(r['date'], category_name, acc['currency'], new_bal_impact, new_cost_impact)
+                    
                     for hr in acc['history']: hr.pop('_running_bal', None)
                     save_data(f"{category_name}_accounts", st.session_state[f"{category_name}_accounts"])
                     st.session_state.edit_hist_id = None
@@ -755,26 +830,16 @@ def render_account_history(acc, category_name):
                 st.rerun()
             if hc3.button("🗑️", key=f"hdel_{category_name}_{acc['id']}_{true_idx}"):
                 action = r['action']
-                old_amt = r['amount']
+                old_amt_val = r['amount']
                 
-                if "更新權益數" in action:
-                    balance_change = -old_amt
-                    cost_change = 0
-                elif action == '建立':
-                    balance_change = -old_amt
-                    cost_change = -old_amt
-                else:
-                    abs_old = abs(old_amt)
-                    if "減少" in action or "出金" in action:
-                        balance_change = abs_old
-                        cost_change = abs_old if "出金" in action else 0
-                    else:
-                        balance_change = -abs_old
-                        cost_change = -abs_old if "入金" in action else 0
-                        
-                acc['balance'] += balance_change
+                # 1. 算出原本的影響並從快照扣除
+                old_bal_impact, old_cost_impact = get_impact(action, old_amt_val, category_name)
+                apply_history_patch(r['date'], category_name, acc['currency'], -old_bal_impact, -old_cost_impact)
+                
+                # 2. 直接扣回當下帳戶的餘額
+                acc['balance'] -= old_bal_impact
                 if category_name == "margin":
-                    acc['cost'] = acc.get("cost", acc["balance"]) + cost_change
+                    acc['cost'] = acc.get("cost", acc["balance"]) - old_cost_impact
                     
                 acc["history"].pop(true_idx)
                 for hr in acc['history']: hr.pop('_running_bal', None)
@@ -889,7 +954,7 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             )
             for acc in sorted_cash_accounts:
                 if "history" not in acc:
-                    acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "初始", "amount": acc["balance"], "note": "系統升級預設"}]
+                    acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "建立", "amount": acc["balance"], "note": "系統升級預設"}]
 
                 if st.session_state.edit_cash_id == acc["id"]:
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
@@ -902,7 +967,9 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                             old_bal = acc["balance"]
                             new_b = safe_float(new_bal)
                             if new_b != old_bal:
-                                acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "編輯", "amount": new_b, "note": f"由 {old_bal} 覆蓋修改為 {new_b}"})
+                                diff = new_b - old_bal
+                                sign_str = "+" if diff >= 0 else ""
+                                acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": f"更新權益數 ({sign_str}{diff:,.0f})", "amount": diff, "note": "強制覆蓋餘額"})
                             acc["balance"] = new_b
                         save_data("cash_accounts", st.session_state.cash_accounts)
                         st.session_state.edit_cash_id = None
@@ -1072,7 +1139,7 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
             )
             for acc in sorted_margin_accounts:
                 if "history" not in acc:
-                    acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "初始", "amount": acc["balance"], "note": "系統升級預設"}]
+                    acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "建立", "amount": acc["balance"], "note": "系統升級預設"}]
                 if "cost" not in acc:
                     acc["cost"] = acc["balance"]
 
@@ -1251,7 +1318,7 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
             )
             for acc in sorted_liabilities:
                 if "history" not in acc:
-                    acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "初始", "amount": acc["balance"], "note": "系統升級預設"}]
+                    acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "建立", "amount": acc["balance"], "note": "系統升級預設"}]
 
                 if st.session_state.edit_liability_id == acc["id"]:
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
@@ -1264,7 +1331,9 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                             old_bal = acc["balance"]
                             new_b = safe_float(new_bal)
                             if new_b != old_bal:
-                                acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "編輯", "amount": new_b, "note": f"由 {old_bal} 覆蓋修改為 {new_b}"})
+                                diff = new_b - old_bal
+                                sign_str = "+" if diff >= 0 else ""
+                                acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": f"更新權益數 ({sign_str}{diff:,.0f})", "amount": diff, "note": "強制覆蓋餘額"})
                             acc["balance"] = new_b
                         save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                         st.session_state.edit_liability_id = None
