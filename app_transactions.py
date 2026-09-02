@@ -468,7 +468,7 @@ holdings = calculate_holdings(st.session_state.transactions)
 for acc in st.session_state.cash_accounts:
     holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True, "is_margin": False})
 
-# 2. 🟢 期貨保證金帳戶 (歸戶為「期貨」，分離成本與現值以產生績效開口圖表)
+# 2. 期貨保證金帳戶 (歸戶為「期貨」，分離成本與現值)
 for acc in st.session_state.margin_accounts:
     m_cost = acc.get("cost", acc["balance"])
     holdings.append({
@@ -497,7 +497,10 @@ if not df.empty:
     df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
     cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and not r.get("is_cash") and not r.get("is_margin"))))
     df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (r.get("現價") if r.get("is_margin") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"]))), axis=1)
-    df["現值"] = df.apply(lambda r: (r["數量"] * r["現價"] if r["現價"] is not None else r["總成本"]) if not r.get("is_margin") else r["現值"], axis=1)
+    
+    # 🟢 修正：使用安全的 .get("現值", 0) 避免 KeyError
+    df["現值"] = df.apply(lambda r: (r["數量"] * r["現價"] if pd.notna(r.get("現價")) and r.get("現價") is not None else r["總成本"]) if not r.get("is_margin") else r.get("現值", 0), axis=1)
+    
     df["未實現損益"] = df["現值"] - df["總成本"]
     
     rates_to_twd = {"TWD": 1.0, "USD": usd_twd, "BTC": btc_usd * usd_twd if btc_usd else 1.0}
@@ -658,10 +661,10 @@ with st.sidebar:
         else: st.warning("請正確填寫數量與價格。")
 
 def format_hist_row(r, privacy):
-    sign = "+" if r['action'] in ["增加", "建立", "入金"] else "-" if r['action'] in ["減少", "出金"] else ""
-    raw_amt = f"{sign}{r['amount']:,.2f}" if r['amount'] % 1 != 0 else f"{sign}{r['amount']:,.0f}"
+    sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
+    raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
     amt_str = "＊＊＊＊" if privacy else raw_amt
-    action_color = "#4ade80" if r['action'] in ["增加", "建立", "入金"] else "#ef4444" if r['action'] in ["減少", "出金"] else "#38bdf8"
+    action_color = "#4ade80" if sign == "+" else "#ef4444" if sign == "-" else "#38bdf8"
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
     return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
@@ -888,9 +891,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                     )
                     st.plotly_chart(fig_cash, use_container_width=True)
 
-# ========================================================
-# 🟢 核心功能：期貨保證金管理區塊 (出入金 vs 損益分離)
-# ========================================================
 def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
     with st.expander("📈 期貨保證金總覽", expanded=False):
         margin_total_bal = 0.0
@@ -995,7 +995,6 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                             if "更新權益數" in adj_type:
                                 diff = val - acc["balance"]
                                 acc["balance"] = val
-                                # 本金 (cost) 不變！完美分離損益
                                 acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": f"更新權益數 ({'+' if diff>=0 else ''}{diff:,.0f})", "amount": diff, "note": adj_note or "日常結算更新"})
                             elif "入金" in adj_type:
                                 if val > 0:
@@ -1015,7 +1014,6 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     if c5.button("取消", key=f"cancel_adjm_{acc['id']}", use_container_width=True):
                         st.session_state.adjust_margin_id = None
                         st.rerun()
-
                 else:
                     c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
                     bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
@@ -1282,7 +1280,7 @@ if not df.empty:
     st.subheader("目前持倉配置")
     df_chart = df[df["數量"] != 0].copy()
     cats = df_chart.groupby("類型")[["顯示現值", "顯示損益", "顯示總成本"]].sum().reset_index().sort_values("顯示現值", ascending=False)
-    order_list = [c for c in cats['類型'] if c not in ['期貨', '現金']] + ([c for c in ['期貨', '現金'] if c in cats['類型'].values])
+    order_list = [c for c in cats['類型'] if c not in ['期貨', '期貨保證金', '現金']] + ([c for c in ['期貨', '期貨保證金', '現金'] if c in cats['類型'].values])
     cats = cats.set_index('類型').loc[order_list].reset_index()
     
     n_cols = min(len(cats), 6)
@@ -1295,7 +1293,7 @@ if not df.empty:
             clr = "#ef4444" if p<0 else "#4ade80"
             amt_s = mask_val(f"{unit.replace('$', '&#36;')} {a:,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {a:,.3f}")
             pnl_s = mask_val(f"{unit.replace('$', '&#36;')} {abs(p):,.0f}" if display_currency != "BTC" else f"{unit.replace('$', '&#36;')} {abs(p):,.3f}")
-            pd_ui = f"<div style='font-size:16px; font-weight:600; color:{clr}; margin-top:4px;'>({sgn}{pnl_s} ｜ {sgn}{pct})</div>" if c != "現金" else "<div style='font-size:16px; margin-top:4px; visibility:hidden;'>-</div>"
+            pd_ui = f"<div style='font-size:16px; font-weight:600; color:{clr}; margin-top:4px;'>({sgn}{pnl_s} ｜ {sgn}{pct})</div>" if c in ["期貨保證金", "現金"] else f"<div style='font-size:16px; margin-top:4px; visibility:hidden;'>-</div>" if c == "現金" else f"<div style='font-size:16px; font-weight:600; color:{clr}; margin-top:4px;'>({sgn}{pnl_s} ｜ {sgn}{pct})</div>"
             cs[i % n_cols].markdown(f"<div style='padding: 5px 0 15px 0;'><div style='font-size:18px; font-weight:600; color:#e2e8f0'>{c}：{amt_s}</div>{pd_ui}</div>", unsafe_allow_html=True)
 
     is_category_view = st.session_state.selected_category is not None
