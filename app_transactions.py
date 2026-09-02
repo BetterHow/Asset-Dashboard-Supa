@@ -481,7 +481,7 @@ def calculate_holdings(transactions):
                 "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
                 "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
                 "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
-                "is_cash": False, "is_margin": False 
+                "is_cash": False, "is_margin": False
             })
     return result
 
@@ -691,7 +691,6 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -723,7 +722,14 @@ with st.sidebar:
             fetch_all_prices.clear(); st.rerun()
         else: st.warning("請正確填寫數量與價格。")
 
-# 🟢 歷史紀錄 UI
+    st.divider()
+    with st.expander("⚙️ 進階設定"):
+        st.caption("當刪除舊紀錄後，圖表並不會自動回溯過去。若你想重置趨勢圖，請使用此功能。")
+        if st.button("🧹 清除所有歷史快照", help="將清空下方的趨勢圖歷史，從今天重新記錄。"):
+            st.session_state.history_snapshots = {}
+            save_data("history_snapshots", {})
+            st.success("歷史快照已清除！請點擊上方重新整理。")
+
 def format_hist_row(r, privacy):
     sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
     raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
@@ -732,7 +738,6 @@ def format_hist_row(r, privacy):
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
     return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
-# 🟢 核心功能：獨立歷史紀錄編輯與還原邏輯
 def render_account_history(acc, category_name):
     history_list = acc.get("history", [])
     if not history_list:
@@ -772,13 +777,11 @@ def render_account_history(acc, category_name):
             if hb_col[0].button("✔️", key=f"hs_{category_name}_{acc['id']}_{true_idx}"):
                 new_a = safe_float(new_amt)
                 if new_a is not None:
-                    # 1. 計算舊資料影響並還原圖表快照
                     old_action = r['action']
                     old_amt_val = r['amount']
                     old_bal_impact, old_cost_impact = get_impact(old_action, old_amt_val, category_name)
                     apply_history_patch(r['date'], category_name, acc['currency'], -old_bal_impact, -old_cost_impact)
                     
-                    # 2. 處理當下帳戶數值的改變
                     action = r['action']
                     balance_change = 0
                     cost_change = 0
@@ -811,7 +814,6 @@ def render_account_history(acc, category_name):
                     r['date'] = new_date
                     r['note'] = new_note
                     
-                    # 3. 將新的影響補進圖表快照
                     new_bal_impact, new_cost_impact = get_impact(r['action'], r['amount'], category_name)
                     apply_history_patch(r['date'], category_name, acc['currency'], new_bal_impact, new_cost_impact)
                     
@@ -832,11 +834,9 @@ def render_account_history(acc, category_name):
                 action = r['action']
                 old_amt_val = r['amount']
                 
-                # 1. 算出原本的影響並從快照扣除
                 old_bal_impact, old_cost_impact = get_impact(action, old_amt_val, category_name)
                 apply_history_patch(r['date'], category_name, acc['currency'], -old_bal_impact, -old_cost_impact)
                 
-                # 2. 直接扣回當下帳戶的餘額
                 acc['balance'] -= old_bal_impact
                 if category_name == "margin":
                     acc['cost'] = acc.get("cost", acc["balance"]) - old_cost_impact
@@ -919,33 +919,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
         
         st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(cash_str)}</div>", unsafe_allow_html=True)
         
-        with st.form("cash_form", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-            with c1: new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
-            with c2: new_cash_curr = st.selectbox("幣別", ["TWD", "USD"], key="cash_curr_box")
-            with c3: new_cash_bal = st.text_input("目前餘額")
-            with c4:
-                st.write("")
-                if st.form_submit_button("新增帳戶", use_container_width=True):
-                    if new_cash_name and safe_float(new_cash_bal) is not None:
-                        new_acc = {
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
-                            "name": new_cash_name.strip(), 
-                            "currency": new_cash_curr, 
-                            "balance": safe_float(new_cash_bal),
-                            "history": [{
-                                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "action": "建立",
-                                "amount": safe_float(new_cash_bal),
-                                "note": "初始餘額"
-                            }]
-                        }
-                        st.session_state.cash_accounts.append(new_acc)
-                        save_data("cash_accounts", st.session_state.cash_accounts)
-                        st.success("已成功新增現金帳戶！")
-                        st.rerun()
-                    else: st.warning("請輸入有效的餘額數字。")
-                    
         if st.session_state.cash_accounts:
             sorted_cash_accounts = sorted(
                 st.session_state.cash_accounts,
@@ -970,6 +943,7 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                                 diff = new_b - old_bal
                                 sign_str = "+" if diff >= 0 else ""
                                 acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": f"更新權益數 ({sign_str}{diff:,.0f})", "amount": diff, "note": "強制覆蓋餘額"})
+                                apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", acc["currency"], diff, diff)
                             acc["balance"] = new_b
                         save_data("cash_accounts", st.session_state.cash_accounts)
                         st.session_state.edit_cash_id = None
@@ -987,8 +961,10 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                         if amt_val is not None and amt_val > 0:
                             if adj_type == "增加":
                                 acc["balance"] += amt_val
+                                apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", acc["currency"], amt_val, amt_val)
                             else:
                                 acc["balance"] -= amt_val
+                                apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", acc["currency"], -amt_val, -amt_val)
                             acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": adj_type, "amount": amt_val, "note": adj_note})
                             save_data("cash_accounts", st.session_state.cash_accounts)
                             st.session_state.adjust_cash_id = None
@@ -1016,11 +992,45 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                             st.rerun()
                     with c_del:
                         if st.button("刪除", key=f"del_c_{acc['id']}", use_container_width=True):
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", acc["currency"], -acc["balance"], -acc["balance"])
                             st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
                             save_data("cash_accounts", st.session_state.cash_accounts)
                             st.rerun()
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+        else:
+            st.caption("尚無帳戶，請在下方新增。")
+
+        # 🟢 新增帳戶表單移至最下方並收折
+        with st.expander("➕ 新增現金帳戶", expanded=False):
+            with st.form("cash_form", clear_on_submit=True):
+                c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+                with c1: new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
+                with c2: new_cash_curr = st.selectbox("幣別", ["TWD", "USD"], key="cash_curr_box")
+                with c3: new_cash_bal = st.text_input("目前餘額")
+                with c4:
+                    st.write("")
+                    if st.form_submit_button("新增帳戶", use_container_width=True):
+                        if new_cash_name and safe_float(new_cash_bal) is not None:
+                            amt = safe_float(new_cash_bal)
+                            new_acc = {
+                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                                "name": new_cash_name.strip(), 
+                                "currency": new_cash_curr, 
+                                "balance": amt,
+                                "history": [{
+                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "action": "建立",
+                                    "amount": amt,
+                                    "note": "初始餘額"
+                                }]
+                            }
+                            st.session_state.cash_accounts.append(new_acc)
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", new_cash_curr, amt, amt)
+                            save_data("cash_accounts", st.session_state.cash_accounts)
+                            st.success("已成功新增現金帳戶！")
+                            st.rerun()
+                        else: st.warning("請輸入有效的餘額數字。")
 
             st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
             if not cash_df.empty and cash_total_display > 0:
@@ -1102,35 +1112,6 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
 
         st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>期貨權益數總額： {mask_val(bal_str)} <span style='font-size: 18px; color: {pnl_clr}; font-weight: normal;'>｜ 累積損益： {mask_val(pnl_str)}</span></div>", unsafe_allow_html=True)
         
-        with st.form("margin_form", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-            with c1: new_margin_name = st.text_input("帳戶名稱 (如: 統一期貨保證金)")
-            with c2: new_margin_curr = st.selectbox("幣別", ["TWD", "USD"], key="margin_curr_box")
-            with c3: new_margin_bal = st.text_input("目前權益數 (初始金額)")
-            with c4:
-                st.write("")
-                if st.form_submit_button("新增保證金帳戶", use_container_width=True):
-                    if new_margin_name and safe_float(new_margin_bal) is not None:
-                        amt = safe_float(new_margin_bal)
-                        new_acc = {
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
-                            "name": new_margin_name.strip(), 
-                            "currency": new_margin_curr, 
-                            "balance": amt,
-                            "cost": amt,
-                            "history": [{
-                                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "action": "建立",
-                                "amount": amt,
-                                "note": "初始入金"
-                            }]
-                        }
-                        st.session_state.margin_accounts.append(new_acc)
-                        save_data("margin_accounts", st.session_state.margin_accounts)
-                        st.success("已成功新增期貨保證金帳戶！")
-                        st.rerun()
-                    else: st.warning("請輸入有效的金額數字。")
-                    
         if st.session_state.margin_accounts:
             sorted_margin_accounts = sorted(
                 st.session_state.margin_accounts,
@@ -1151,9 +1132,18 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     new_cost = c4.text_input("累積本金(成本)", str(acc["cost"]), key=f"m_cost_{acc['id']}", label_visibility="collapsed")
                     if c5.button("儲存", key=f"save_m_{acc['id']}", type="primary", use_container_width=True):
                         acc["name"], acc["currency"] = new_name.strip() if new_name.strip() else acc["name"], new_curr
-                        if safe_float(new_bal) is not None: acc["balance"] = safe_float(new_bal)
-                        if safe_float(new_cost) is not None: acc["cost"] = safe_float(new_cost)
+                        
+                        b_diff, c_diff = 0, 0
+                        if safe_float(new_bal) is not None: 
+                            b_diff = safe_float(new_bal) - acc["balance"]
+                            acc["balance"] = safe_float(new_bal)
+                        if safe_float(new_cost) is not None: 
+                            c_diff = safe_float(new_cost) - acc["cost"]
+                            acc["cost"] = safe_float(new_cost)
+                            
                         acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "編輯", "amount": acc["balance"], "note": f"手動覆蓋 權益數:{acc['balance']} / 本金:{acc['cost']}"})
+                        apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", acc["currency"], b_diff, c_diff)
+                        
                         save_data("margin_accounts", st.session_state.margin_accounts)
                         st.session_state.edit_margin_id = None
                         st.rerun()
@@ -1170,20 +1160,28 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     if c4.button("確認", key=f"save_adjm_{acc['id']}", type="primary", use_container_width=True):
                         val = safe_float(adj_input)
                         if val is not None:
+                            b_diff, c_diff = 0, 0
                             if "更新權益數" in adj_type:
                                 diff = val - acc["balance"]
+                                b_diff = diff
                                 acc["balance"] = val
                                 acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": f"更新權益數 ({'+' if diff>=0 else ''}{diff:,.0f})", "amount": diff, "note": adj_note or "日常結算更新"})
                             elif "入金" in adj_type:
                                 if val > 0:
+                                    b_diff = val
+                                    c_diff = val
                                     acc["balance"] += val
                                     acc["cost"] += val
                                     acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "入金", "amount": val, "note": adj_note})
                             elif "出金" in adj_type:
                                 if val > 0:
+                                    b_diff = -val
+                                    c_diff = -val
                                     acc["balance"] -= val
                                     acc["cost"] -= val
                                     acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "出金", "amount": val, "note": adj_note})
+                            
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", acc["currency"], b_diff, c_diff)
                             save_data("margin_accounts", st.session_state.margin_accounts)
                             st.session_state.adjust_margin_id = None
                             st.rerun()
@@ -1211,11 +1209,46 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                             st.rerun()
                     with c_del:
                         if st.button("刪除", key=f"del_m_{acc['id']}", use_container_width=True):
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", acc["currency"], -acc["balance"], -acc["cost"])
                             st.session_state.margin_accounts = [a for a in st.session_state.margin_accounts if a["id"] != acc["id"]]
                             save_data("margin_accounts", st.session_state.margin_accounts)
                             st.rerun()
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+        else:
+            st.caption("尚無帳戶，請在下方新增。")
+
+        # 🟢 新增帳戶表單移至最下方並收折
+        with st.expander("➕ 新增期貨保證金帳戶", expanded=False):
+            with st.form("margin_form", clear_on_submit=True):
+                c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+                with c1: new_margin_name = st.text_input("帳戶名稱 (如: 統一期貨保證金)")
+                with c2: new_margin_curr = st.selectbox("幣別", ["TWD", "USD"], key="margin_curr_box")
+                with c3: new_margin_bal = st.text_input("目前權益數 (初始金額)")
+                with c4:
+                    st.write("")
+                    if st.form_submit_button("新增保證金帳戶", use_container_width=True):
+                        if new_margin_name and safe_float(new_margin_bal) is not None:
+                            amt = safe_float(new_margin_bal)
+                            new_acc = {
+                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                                "name": new_margin_name.strip(), 
+                                "currency": new_margin_curr, 
+                                "balance": amt,
+                                "cost": amt,
+                                "history": [{
+                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "action": "建立",
+                                    "amount": amt,
+                                    "note": "初始入金"
+                                }]
+                            }
+                            st.session_state.margin_accounts.append(new_acc)
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", new_margin_curr, amt, amt)
+                            save_data("margin_accounts", st.session_state.margin_accounts)
+                            st.success("已成功新增期貨保證金帳戶！")
+                            st.rerun()
+                        else: st.warning("請輸入有效的金額數字。")
 
             st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
             if not margin_df.empty and margin_total_bal > 0:
@@ -1283,33 +1316,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
         lev_str = f"{total_value / net_value:.2f} 倍" if net_value > 0 else 'N/A'
         st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(lib_str)} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(lev_str)}</span></div>", unsafe_allow_html=True)
         
-        with st.form("liability_form", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-            with c1: new_lib_name = st.text_input("負債名稱 (如: 股票質借 / 房貸)")
-            with c2: new_lib_curr = st.selectbox("幣別", ["TWD", "USD"], key="lib_curr_box")
-            with c3: new_lib_bal = st.text_input("目前金額")
-            with c4:
-                st.write("")
-                if st.form_submit_button("新增負債", use_container_width=True):
-                    if new_lib_name and safe_float(new_lib_bal) is not None:
-                        new_acc = {
-                            "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
-                            "name": new_lib_name.strip(), 
-                            "currency": new_lib_curr, 
-                            "balance": safe_float(new_lib_bal),
-                            "history": [{
-                                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "action": "建立",
-                                "amount": safe_float(new_lib_bal),
-                                "note": "初始餘額"
-                            }]
-                        }
-                        st.session_state.liabilities_accounts.append(new_acc)
-                        save_data("liabilities_accounts", st.session_state.liabilities_accounts)
-                        st.success("已成功新增負債！")
-                        st.rerun()
-                    else: st.warning("請輸入有效的金額數字。")
-                        
         if st.session_state.liabilities_accounts:
             sorted_liabilities = sorted(
                 st.session_state.liabilities_accounts,
@@ -1334,6 +1340,7 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                                 diff = new_b - old_bal
                                 sign_str = "+" if diff >= 0 else ""
                                 acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": f"更新權益數 ({sign_str}{diff:,.0f})", "amount": diff, "note": "強制覆蓋餘額"})
+                                apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", acc["currency"], diff, 0)
                             acc["balance"] = new_b
                         save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                         st.session_state.edit_liability_id = None
@@ -1351,8 +1358,10 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                         if amt_val is not None and amt_val > 0:
                             if adj_type == "增加":
                                 acc["balance"] += amt_val
+                                apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", acc["currency"], amt_val, 0)
                             else:
                                 acc["balance"] -= amt_val
+                                apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", acc["currency"], -amt_val, 0)
                             acc["history"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": adj_type, "amount": amt_val, "note": adj_note})
                             save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                             st.session_state.adjust_liability_id = None
@@ -1380,11 +1389,45 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                             st.rerun()
                     with c_del:
                         if st.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", acc["currency"], -acc["balance"], 0)
                             st.session_state.liabilities_accounts = [a for a in st.session_state.liabilities_accounts if a["id"] != acc["id"]]
                             save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                             st.rerun()
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+        else:
+            st.caption("尚無帳戶，請在下方新增。")
+
+        # 🟢 新增帳戶表單移至最下方並收折
+        with st.expander("➕ 新增負債帳戶", expanded=False):
+            with st.form("liability_form", clear_on_submit=True):
+                c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+                with c1: new_lib_name = st.text_input("負債名稱 (如: 股票質借 / 房貸)")
+                with c2: new_lib_curr = st.selectbox("幣別", ["TWD", "USD"], key="lib_curr_box")
+                with c3: new_lib_bal = st.text_input("目前金額")
+                with c4:
+                    st.write("")
+                    if st.form_submit_button("新增負債", use_container_width=True):
+                        if new_lib_name and safe_float(new_lib_bal) is not None:
+                            amt = safe_float(new_lib_bal)
+                            new_acc = {
+                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                                "name": new_lib_name.strip(), 
+                                "currency": new_lib_curr, 
+                                "balance": amt,
+                                "history": [{
+                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "action": "建立",
+                                    "amount": amt,
+                                    "note": "初始餘額"
+                                }]
+                            }
+                            st.session_state.liabilities_accounts.append(new_acc)
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", new_lib_curr, amt, 0)
+                            save_data("liabilities_accounts", st.session_state.liabilities_accounts)
+                            st.success("已成功新增負債！")
+                            st.rerun()
+                        else: st.warning("請輸入有效的金額數字。")
 
             st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
@@ -1425,7 +1468,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                         300
                     )
                     st.plotly_chart(fig_lib, use_container_width=True)
-        else: st.caption("目前無負債紀錄。")
 
 render_cash_manager(unit, display_currency, btc_usd, usd_twd)
 render_margin_manager(unit, display_currency, btc_usd, usd_twd)
