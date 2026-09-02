@@ -481,7 +481,7 @@ def calculate_holdings(transactions):
                 "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
                 "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
                 "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
-                "is_cash": False, "is_margin": False
+                "is_cash": False, "is_margin": False 
             })
     return result
 
@@ -691,6 +691,7 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -917,8 +918,38 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
         safe_unit = unit.replace("$", "&#36;")
         cash_str = f"{safe_unit} {cash_total_display:,.0f}" if display_currency != "BTC" else f"{safe_unit} {cash_total_display:,.4f}"
         
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(cash_str)}</div>", unsafe_allow_html=True)
-        
+        # 🟢 標題與彈出式新增按鈕並排
+        c_head1, c_head2 = st.columns([5.5, 2.0])
+        with c_head1:
+            st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(cash_str)}</div>", unsafe_allow_html=True)
+        with c_head2:
+            with st.popover("➕ 新增帳戶", use_container_width=True):
+                with st.form("cash_form", clear_on_submit=True):
+                    new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
+                    new_cash_curr = st.selectbox("幣別", ["TWD", "USD"], key="cash_curr_box")
+                    new_cash_bal = st.text_input("目前餘額")
+                    if st.form_submit_button("確認新增", use_container_width=True):
+                        if new_cash_name and safe_float(new_cash_bal) is not None:
+                            amt = safe_float(new_cash_bal)
+                            new_acc = {
+                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                                "name": new_cash_name.strip(), 
+                                "currency": new_cash_curr, 
+                                "balance": amt,
+                                "history": [{
+                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "action": "建立",
+                                    "amount": amt,
+                                    "note": "初始餘額"
+                                }]
+                            }
+                            st.session_state.cash_accounts.append(new_acc)
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", new_cash_curr, amt, amt)
+                            save_data("cash_accounts", st.session_state.cash_accounts)
+                            st.success("已成功新增現金帳戶！")
+                            st.rerun()
+                        else: st.warning("請輸入有效的餘額數字。")
+                    
         if st.session_state.cash_accounts:
             sorted_cash_accounts = sorted(
                 st.session_state.cash_accounts,
@@ -999,85 +1030,55 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
-            st.caption("尚無帳戶，請在下方新增。")
+            st.caption("尚無帳戶，請在上方新增。")
 
-        # 🟢 新增帳戶表單移至最下方並收折
-        with st.expander("➕ 新增現金帳戶", expanded=False):
-            with st.form("cash_form", clear_on_submit=True):
-                c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-                with c1: new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
-                with c2: new_cash_curr = st.selectbox("幣別", ["TWD", "USD"], key="cash_curr_box")
-                with c3: new_cash_bal = st.text_input("目前餘額")
-                with c4:
-                    st.write("")
-                    if st.form_submit_button("新增帳戶", use_container_width=True):
-                        if new_cash_name and safe_float(new_cash_bal) is not None:
-                            amt = safe_float(new_cash_bal)
-                            new_acc = {
-                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
-                                "name": new_cash_name.strip(), 
-                                "currency": new_cash_curr, 
-                                "balance": amt,
-                                "history": [{
-                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "action": "建立",
-                                    "amount": amt,
-                                    "note": "初始餘額"
-                                }]
-                            }
-                            st.session_state.cash_accounts.append(new_acc)
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", new_cash_curr, amt, amt)
-                            save_data("cash_accounts", st.session_state.cash_accounts)
-                            st.success("已成功新增現金帳戶！")
-                            st.rerun()
-                        else: st.warning("請輸入有效的餘額數字。")
-
-            st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-            if not cash_df.empty and cash_total_display > 0:
-                c_chart_left, c_chart_right = st.columns([1.5, 1.0])
-                with c_chart_left:
-                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 現金變化趨勢</div>", unsafe_allow_html=True)
-                    history_data = st.session_state.history_snapshots
-                    if len(history_data) > 0:
-                        cash_hist = []
-                        for d_str, data_val in history_data.items():
-                            if isinstance(data_val, dict) and data_val.get("version") == "v2":
-                                c_val = data_val.get(display_currency, data_val.get("TWD")).get("categories", {}).get("現金", {}).get("value", 0.0)
-                                cash_hist.append({'Date': d_str, 'Value': c_val})
-                            else:
-                                c_val = data_val.get("categories", {}).get("現金", {}).get("value", 0.0) if isinstance(data_val, dict) else 0.0
-                                div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
-                                cash_hist.append({'Date': d_str, 'Value': c_val / div})
-                                
-                        cash_hist_df = pd.DataFrame(cash_hist)
-                        if not cash_hist_df.empty:
-                            cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
-                            cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                            if cash_hist_df['Value'].sum() > 0:
-                                fig_cash_line = _build_cash_trend_fig(
-                                    tuple(cash_hist_df['Date'].astype(str).tolist()),
-                                    tuple(cash_hist_df['Value'].tolist()),
-                                    safe_unit,
-                                    st.session_state.privacy_mode
-                                )
-                                st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
-                            else:
-                                st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+        st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+        # 🟢 圖表現在完全獨立在清單外
+        if not cash_df.empty and cash_total_display > 0:
+            c_chart_left, c_chart_right = st.columns([1.5, 1.0])
+            with c_chart_left:
+                st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 現金變化趨勢</div>", unsafe_allow_html=True)
+                history_data = st.session_state.history_snapshots
+                if len(history_data) > 0:
+                    cash_hist = []
+                    for d_str, data_val in history_data.items():
+                        if isinstance(data_val, dict) and data_val.get("version") == "v2":
+                            c_val = data_val.get(display_currency, data_val.get("TWD")).get("categories", {}).get("現金", {}).get("value", 0.0)
+                            cash_hist.append({'Date': d_str, 'Value': c_val})
+                        else:
+                            c_val = data_val.get("categories", {}).get("現金", {}).get("value", 0.0) if isinstance(data_val, dict) else 0.0
+                            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+                            cash_hist.append({'Date': d_str, 'Value': c_val / div})
+                            
+                    cash_hist_df = pd.DataFrame(cash_hist)
+                    if not cash_hist_df.empty:
+                        cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
+                        cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
+                        if cash_hist_df['Value'].sum() > 0:
+                            fig_cash_line = _build_cash_trend_fig(
+                                tuple(cash_hist_df['Date'].astype(str).tolist()),
+                                tuple(cash_hist_df['Value'].tolist()),
+                                safe_unit,
+                                st.session_state.privacy_mode
+                            )
+                            st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                     else:
-                        st.caption("尚無歷史資料。")
-                with c_chart_right:
-                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 現金分佈佔比</div>", unsafe_allow_html=True)
-                    fig_cash = _build_pie_fig(
-                        tuple(cash_df["名稱"].tolist()),
-                        tuple(cash_df["顯示金額"].tolist()),
-                        ("#00CC96", "#AB63FA", "#FFA15A", "#636EFA", "#EF553B"),
-                        safe_unit,
-                        st.session_state.privacy_mode,
-                        300
-                    )
-                    st.plotly_chart(fig_cash, use_container_width=True)
+                        st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+                else:
+                    st.caption("尚無歷史資料。")
+            with c_chart_right:
+                st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 現金分佈佔比</div>", unsafe_allow_html=True)
+                fig_cash = _build_pie_fig(
+                    tuple(cash_df["名稱"].tolist()),
+                    tuple(cash_df["顯示金額"].tolist()),
+                    ("#00CC96", "#AB63FA", "#FFA15A", "#636EFA", "#EF553B"),
+                    safe_unit,
+                    st.session_state.privacy_mode,
+                    300
+                )
+                st.plotly_chart(fig_cash, use_container_width=True)
 
 def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
     with st.expander("📈 期貨保證金總覽", expanded=False):
@@ -1110,8 +1111,39 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
         pnl_clr = "#4ade80" if pnl_val >= 0 else "#ef4444"
         pnl_str = f"{sgn}{safe_unit} {pnl_val:,.0f} ({sgn}{pnl_pct:.2f}%)" if display_currency != "BTC" else f"{sgn}{safe_unit} {pnl_val:,.4f} ({sgn}{pnl_pct:.2f}%)"
 
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>期貨權益數總額： {mask_val(bal_str)} <span style='font-size: 18px; color: {pnl_clr}; font-weight: normal;'>｜ 累積損益： {mask_val(pnl_str)}</span></div>", unsafe_allow_html=True)
-        
+        # 🟢 標題與彈出式新增按鈕並排
+        c_head1, c_head2 = st.columns([5.5, 2.0])
+        with c_head1:
+            st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>期貨權益數總額： {mask_val(bal_str)} <span style='font-size: 18px; color: {pnl_clr}; font-weight: normal;'>｜ 累積損益： {mask_val(pnl_str)}</span></div>", unsafe_allow_html=True)
+        with c_head2:
+            with st.popover("➕ 新增帳戶", use_container_width=True):
+                with st.form("margin_form", clear_on_submit=True):
+                    new_margin_name = st.text_input("帳戶名稱 (如: 統一期貨保證金)")
+                    new_margin_curr = st.selectbox("幣別", ["TWD", "USD"], key="margin_curr_box")
+                    new_margin_bal = st.text_input("目前權益數 (初始金額)")
+                    if st.form_submit_button("確認新增", use_container_width=True):
+                        if new_margin_name and safe_float(new_margin_bal) is not None:
+                            amt = safe_float(new_margin_bal)
+                            new_acc = {
+                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                                "name": new_margin_name.strip(), 
+                                "currency": new_margin_curr, 
+                                "balance": amt,
+                                "cost": amt,
+                                "history": [{
+                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "action": "建立",
+                                    "amount": amt,
+                                    "note": "初始入金"
+                                }]
+                            }
+                            st.session_state.margin_accounts.append(new_acc)
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", new_margin_curr, amt, amt)
+                            save_data("margin_accounts", st.session_state.margin_accounts)
+                            st.success("已成功新增期貨保證金帳戶！")
+                            st.rerun()
+                        else: st.warning("請輸入有效的金額數字。")
+                    
         if st.session_state.margin_accounts:
             sorted_margin_accounts = sorted(
                 st.session_state.margin_accounts,
@@ -1154,7 +1186,7 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                 elif st.session_state.adjust_margin_id == acc["id"]:
                     c1, c2, c3, c4, c5 = st.columns([2.5, 1.5, 2.0, 1, 1])
                     adj_type = c1.selectbox("動作類型", ["🎯 更新權益數 (操作損益)", "📥 入金 (增加本金與餘額)", "📤 出金 (減少本金與餘額)"], key=f"adj_tm_{acc['id']}", label_visibility="collapsed")
-                    adj_input = c2.text_input("數額", key=f"adj_val_{acc['id']}", label_visibility="collapsed", placeholder="最新權益數或出入金金額")
+                    adj_input = c2.text_input("數額", key=f"adj_val_{acc['id']}", label_visibility="collapsed", placeholder="最新權益數或金額")
                     adj_note = c3.text_input("備註", key=f"adj_notem_{acc['id']}", label_visibility="collapsed", placeholder="選填備註")
                     
                     if c4.button("確認", key=f"save_adjm_{acc['id']}", type="primary", use_container_width=True):
@@ -1216,87 +1248,56 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
-            st.caption("尚無帳戶，請在下方新增。")
+            st.caption("尚無帳戶，請在上方新增。")
 
-        # 🟢 新增帳戶表單移至最下方並收折
-        with st.expander("➕ 新增期貨保證金帳戶", expanded=False):
-            with st.form("margin_form", clear_on_submit=True):
-                c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-                with c1: new_margin_name = st.text_input("帳戶名稱 (如: 統一期貨保證金)")
-                with c2: new_margin_curr = st.selectbox("幣別", ["TWD", "USD"], key="margin_curr_box")
-                with c3: new_margin_bal = st.text_input("目前權益數 (初始金額)")
-                with c4:
-                    st.write("")
-                    if st.form_submit_button("新增保證金帳戶", use_container_width=True):
-                        if new_margin_name and safe_float(new_margin_bal) is not None:
-                            amt = safe_float(new_margin_bal)
-                            new_acc = {
-                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
-                                "name": new_margin_name.strip(), 
-                                "currency": new_margin_curr, 
-                                "balance": amt,
-                                "cost": amt,
-                                "history": [{
-                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "action": "建立",
-                                    "amount": amt,
-                                    "note": "初始入金"
-                                }]
-                            }
-                            st.session_state.margin_accounts.append(new_acc)
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", new_margin_curr, amt, amt)
-                            save_data("margin_accounts", st.session_state.margin_accounts)
-                            st.success("已成功新增期貨保證金帳戶！")
-                            st.rerun()
-                        else: st.warning("請輸入有效的金額數字。")
-
-            st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-            if not margin_df.empty and margin_total_bal > 0:
-                c_chart_left, c_chart_right = st.columns([1.5, 1.0])
-                with c_chart_left:
-                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 期貨權益數變化趨勢</div>", unsafe_allow_html=True)
-                    history_data = st.session_state.history_snapshots
-                    if len(history_data) > 0:
-                        margin_hist = []
-                        for d_str, data_val in history_data.items():
-                            if isinstance(data_val, dict) and data_val.get("version") == "v2":
-                                c_val = data_val.get(display_currency, data_val.get("TWD")).get("categories", {}).get("期貨", {}).get("value", 0.0)
-                                margin_hist.append({'Date': d_str, 'Value': c_val})
-                            else:
-                                c_val = data_val.get("categories", {}).get("期貨", {}).get("value", 0.0) if isinstance(data_val, dict) else 0.0
-                                div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
-                                margin_hist.append({'Date': d_str, 'Value': c_val / div})
-                                
-                        margin_hist_df = pd.DataFrame(margin_hist)
-                        if not margin_hist_df.empty:
-                            margin_hist_df['Date'] = pd.to_datetime(margin_hist_df['Date'])
-                            margin_hist_df = margin_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                            if margin_hist_df['Value'].sum() > 0:
-                                fig_margin_line = _build_cash_trend_fig(
-                                    tuple(margin_hist_df['Date'].astype(str).tolist()),
-                                    tuple(margin_hist_df['Value'].tolist()),
-                                    safe_unit,
-                                    st.session_state.privacy_mode
-                                )
-                                fig_margin_line.update_traces(name='期貨權益數', line=dict(color='#AB63FA'), fillcolor='rgba(171, 99, 250, 0.1)')
-                                st.plotly_chart(fig_margin_line, use_container_width=True, config={'scrollZoom': True})
-                            else:
-                                st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+        st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+        # 🟢 圖表現在完全獨立在清單外
+        if not margin_df.empty and margin_total_bal > 0:
+            c_chart_left, c_chart_right = st.columns([1.5, 1.0])
+            with c_chart_left:
+                st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 期貨權益數變化趨勢</div>", unsafe_allow_html=True)
+                history_data = st.session_state.history_snapshots
+                if len(history_data) > 0:
+                    margin_hist = []
+                    for d_str, data_val in history_data.items():
+                        if isinstance(data_val, dict) and data_val.get("version") == "v2":
+                            c_val = data_val.get(display_currency, data_val.get("TWD")).get("categories", {}).get("期貨", {}).get("value", 0.0)
+                            margin_hist.append({'Date': d_str, 'Value': c_val})
+                        else:
+                            c_val = data_val.get("categories", {}).get("期貨", {}).get("value", 0.0) if isinstance(data_val, dict) else 0.0
+                            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+                            margin_hist.append({'Date': d_str, 'Value': c_val / div})
+                            
+                    margin_hist_df = pd.DataFrame(margin_hist)
+                    if not margin_hist_df.empty:
+                        margin_hist_df['Date'] = pd.to_datetime(margin_hist_df['Date'])
+                        margin_hist_df = margin_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
+                        if margin_hist_df['Value'].sum() > 0:
+                            fig_margin_line = _build_cash_trend_fig(
+                                tuple(margin_hist_df['Date'].astype(str).tolist()),
+                                tuple(margin_hist_df['Value'].tolist()),
+                                safe_unit,
+                                st.session_state.privacy_mode
+                            )
+                            fig_margin_line.update_traces(name='期貨權益數', line=dict(color='#AB63FA'), fillcolor='rgba(171, 99, 250, 0.1)')
+                            st.plotly_chart(fig_margin_line, use_container_width=True, config={'scrollZoom': True})
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                     else:
-                        st.caption("尚無歷史資料。")
-                with c_chart_right:
-                    st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 保證金分佈佔比</div>", unsafe_allow_html=True)
-                    fig_margin = _build_pie_fig(
-                        tuple(margin_df["名稱"].tolist()),
-                        tuple(margin_df["顯示金額"].tolist()),
-                        ("#AB63FA", "#FFA15A", "#00CC96", "#636EFA", "#EF553B"),
-                        safe_unit,
-                        st.session_state.privacy_mode,
-                        300
-                    )
-                    st.plotly_chart(fig_margin, use_container_width=True)
+                        st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+                else:
+                    st.caption("尚無歷史資料。")
+            with c_chart_right:
+                st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 保證金分佈佔比</div>", unsafe_allow_html=True)
+                fig_margin = _build_pie_fig(
+                    tuple(margin_df["名稱"].tolist()),
+                    tuple(margin_df["顯示金額"].tolist()),
+                    ("#AB63FA", "#FFA15A", "#00CC96", "#636EFA", "#EF553B"),
+                    safe_unit,
+                    st.session_state.privacy_mode,
+                    300
+                )
+                st.plotly_chart(fig_margin, use_container_width=True)
 
 def render_liability_manager(unit, display_currency, total_value, net_value, btc_usd, usd_twd):
     with st.expander("💳 負債總覽", expanded=False):
@@ -1314,8 +1315,39 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
         safe_unit = unit.replace("$", "&#36;")
         lib_str = f"{safe_unit} {lib_total_display:,.0f}" if display_currency != "BTC" else f"{safe_unit} {lib_total_display:,.4f}"
         lev_str = f"{total_value / net_value:.2f} 倍" if net_value > 0 else 'N/A'
-        st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(lib_str)} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(lev_str)}</span></div>", unsafe_allow_html=True)
         
+        # 🟢 標題與彈出式新增按鈕並排
+        c_head1, c_head2 = st.columns([5.5, 2.0])
+        with c_head1:
+            st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(lib_str)} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(lev_str)}</span></div>", unsafe_allow_html=True)
+        with c_head2:
+            with st.popover("➕ 新增帳戶", use_container_width=True):
+                with st.form("liability_form", clear_on_submit=True):
+                    new_lib_name = st.text_input("負債名稱 (如: 股票質借 / 房貸)")
+                    new_lib_curr = st.selectbox("幣別", ["TWD", "USD"], key="lib_curr_box")
+                    new_lib_bal = st.text_input("目前金額")
+                    if st.form_submit_button("確認新增", use_container_width=True):
+                        if new_lib_name and safe_float(new_lib_bal) is not None:
+                            amt = safe_float(new_lib_bal)
+                            new_acc = {
+                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
+                                "name": new_lib_name.strip(), 
+                                "currency": new_lib_curr, 
+                                "balance": amt,
+                                "history": [{
+                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "action": "建立",
+                                    "amount": amt,
+                                    "note": "初始餘額"
+                                }]
+                            }
+                            st.session_state.liabilities_accounts.append(new_acc)
+                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", new_lib_curr, amt, 0)
+                            save_data("liabilities_accounts", st.session_state.liabilities_accounts)
+                            st.success("已成功新增負債！")
+                            st.rerun()
+                        else: st.warning("請輸入有效的金額數字。")
+                        
         if st.session_state.liabilities_accounts:
             sorted_liabilities = sorted(
                 st.session_state.liabilities_accounts,
@@ -1396,40 +1428,11 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
-            st.caption("尚無帳戶，請在下方新增。")
+            st.caption("尚無帳戶，請在上方新增。")
 
-        # 🟢 新增帳戶表單移至最下方並收折
-        with st.expander("➕ 新增負債帳戶", expanded=False):
-            with st.form("liability_form", clear_on_submit=True):
-                c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-                with c1: new_lib_name = st.text_input("負債名稱 (如: 股票質借 / 房貸)")
-                with c2: new_lib_curr = st.selectbox("幣別", ["TWD", "USD"], key="lib_curr_box")
-                with c3: new_lib_bal = st.text_input("目前金額")
-                with c4:
-                    st.write("")
-                    if st.form_submit_button("新增負債", use_container_width=True):
-                        if new_lib_name and safe_float(new_lib_bal) is not None:
-                            amt = safe_float(new_lib_bal)
-                            new_acc = {
-                                "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
-                                "name": new_lib_name.strip(), 
-                                "currency": new_lib_curr, 
-                                "balance": amt,
-                                "history": [{
-                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "action": "建立",
-                                    "amount": amt,
-                                    "note": "初始餘額"
-                                }]
-                            }
-                            st.session_state.liabilities_accounts.append(new_acc)
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", new_lib_curr, amt, 0)
-                            save_data("liabilities_accounts", st.session_state.liabilities_accounts)
-                            st.success("已成功新增負債！")
-                            st.rerun()
-                        else: st.warning("請輸入有效的金額數字。")
-
-            st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+        # 🟢 圖表現在完全獨立在清單外
+        if not lib_df.empty and lib_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 負債變化趨勢</div>", unsafe_allow_html=True)
