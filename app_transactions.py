@@ -416,7 +416,8 @@ def calculate_holdings(transactions):
                 "名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"],
                 "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
                 "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
-                "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], "is_cash": False
+                "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
+                "is_cash": False, "is_margin": False # 🟢 強制為常規交易加上標籤，杜絕 NaN 誤判
             })
     return result
 
@@ -468,7 +469,7 @@ holdings = calculate_holdings(st.session_state.transactions)
 for acc in st.session_state.cash_accounts:
     holdings.append({"名稱": acc["name"], "代號": "", "幣別": acc["currency"], "類型": "現金", "數量": acc["balance"], "原始總成本": acc["balance"], "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0, "is_cash": True, "is_margin": False})
 
-# 2. 期貨保證金帳戶 (歸戶為「期貨」，分離成本與現值)
+# 2. 🟢 期貨保證金帳戶 (歸戶為「期貨」，分離成本與現值以產生績效開口圖表)
 for acc in st.session_state.margin_accounts:
     m_cost = acc.get("cost", acc["balance"])
     holdings.append({
@@ -492,14 +493,19 @@ for h in holdings:
         h["調整後價格"] = (h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"]) / h["數量"] if abs(h["數量"]) > 0 else 0
         h["歷史總均價"] = (h["原始總成本"] - h["已實現損益"]) / h["數量"] if abs(h["數量"]) > 0 else 0
 
+# 確保 Dataframe 初始化時所有欄位都存在，避免 NaN 污染判斷
 df = pd.DataFrame(holdings) if holdings else pd.DataFrame(columns=["名稱", "代號", "幣別", "類型", "數量", "原始總成本", "平均價格", "CC權利金", "SP權利金", "股息", "已實現損益", "歷史買進數量", "歷史賣出數量", "is_cash", "is_margin", "總成本", "調整後價格", "歷史總均價"])
+
 if not df.empty:
     df["類型"] = df["類型"].replace({"股票": "台股", "ETF": "台股"})
-    cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and not r.get("is_cash") and not r.get("is_margin"))))
-    df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") else (r.get("現價") if r.get("is_margin") else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"]))), axis=1)
     
-    # 🟢 修正：使用安全的 .get("現值", 0) 避免 KeyError
-    df["現值"] = df.apply(lambda r: (r["數量"] * r["現價"] if pd.notna(r.get("現價")) and r.get("現價") is not None else r["總成本"]) if not r.get("is_margin") else r.get("現值", 0), axis=1)
+    # 🟢 修正：強制排除 is_cash 和 is_margin 時，必須使用嚴格的 == True 或 != True 判斷
+    cp = fetch_all_prices(tuple(set(r["代號"] for _, r in df.iterrows() if r.get("代號") and r.get("is_cash") != True and r.get("is_margin") != True)))
+    
+    df["現價"] = df.apply(lambda r: 1.0 if r.get("is_cash") == True else (r.get("現價") if r.get("is_margin") == True else (st.session_state.manual_prices.get(r["代號"] or r["名稱"]) or cp.get(r["代號"]))), axis=1)
+    
+    # 🟢 修正：使用嚴格相等的 is_margin == True 來決定要不要調用已存在的 "現值"
+    df["現值"] = df.apply(lambda r: r.get("現值", 0) if r.get("is_margin") == True else (r["數量"] * r["現價"] if pd.notna(r.get("現價")) and r.get("現價") is not None else r["總成本"]), axis=1)
     
     df["未實現損益"] = df["現值"] - df["總成本"]
     
