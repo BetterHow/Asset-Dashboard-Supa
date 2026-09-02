@@ -658,13 +658,14 @@ with st.sidebar:
             fetch_all_prices.clear(); st.rerun()
         else: st.warning("請正確填寫數量與價格。")
 
+# 🟢 歷史紀錄 UI
 def format_hist_row(r, privacy):
     sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
     raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
     amt_str = "＊＊＊＊" if privacy else raw_amt
     action_color = "#4ade80" if sign == "+" else "#ef4444" if sign == "-" else "#38bdf8"
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
-    return f"<div style='font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
+    return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
 # 🟢 核心功能：獨立歷史紀錄編輯與還原邏輯
 def render_account_history(acc, category_name):
@@ -673,43 +674,73 @@ def render_account_history(acc, category_name):
         st.caption("尚無異動紀錄")
         return
         
+    hist_sorted = sorted(history_list, key=lambda x: x['date'])
+    run_bal = 0
+    for hr in hist_sorted:
+        act = hr['action']
+        if "更新權益數" in act:
+            run_bal += hr['amount']
+        elif act == '建立' or "入金" in act or "增加" in act:
+            run_bal += abs(hr['amount'])
+        elif "出金" in act or "減少" in act:
+            run_bal -= abs(hr['amount'])
+        hr['_running_bal'] = run_bal
+
     def render_row(r, true_idx):
         is_editing = (st.session_state.get("edit_hist_id") == f"{category_name}_{acc['id']}_{true_idx}")
         if is_editing:
-            hc1, hc2, hc3, hc4 = st.columns([2.5, 2, 3.5, 2])
+            hc1, hc2, hc3, hc4 = st.columns([2.8, 2.2, 3.0, 2.0])
             new_date = hc1.text_input("日期", value=r['date'], key=f"hd_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed")
-            new_amt = hc2.text_input("金額/差額", value=str(abs(r['amount'])), key=f"ha_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed")
-            new_note = hc3.text_input("備註", value=r.get('note',''), key=f"hn_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed")
+            
+            is_target_type = ("更新權益數" in r['action'] or r['action'] == '建立')
+            if is_target_type:
+                default_val = str(r.get('_running_bal', r['amount']))
+                ph = "修改後目標金額"
+            else:
+                default_val = str(abs(r['amount']))
+                ph = "修改異動差額"
+                
+            new_amt = hc2.text_input(ph, value=default_val, key=f"ha_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed", placeholder=ph)
+            new_note = hc3.text_input("備註", value=r.get('note',''), key=f"hn_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed", placeholder="備註")
             
             hb_col = hc4.columns(2)
             if hb_col[0].button("✔️", key=f"hs_{category_name}_{acc['id']}_{true_idx}"):
-                old_amt = r['amount']
                 new_a = safe_float(new_amt)
                 if new_a is not None:
                     action = r['action']
+                    balance_change = 0
+                    cost_change = 0
                     
-                    if "編輯" not in action:
-                        delta = new_a - abs(old_amt)
-                        if "減少" in action or "出金" in action or ("更新權益數" in action and "-" in action):
-                            balance_change = -delta
-                            cost_change = -delta if "出金" in action else 0
-                        else:
-                            balance_change = delta
-                            cost_change = delta if ("入金" in action or "建立" in action) else 0
-                            
-                        acc['balance'] += balance_change
-                        if category_name == "margin":
-                            acc['cost'] += cost_change
-                            
-                    r['date'] = new_date
                     if "更新權益數" in action:
-                        sign_str = "-" if ("-" in action) else "+"
-                        r['amount'] = new_a if sign_str == "+" else -new_a
-                        r['action'] = f"更新權益數 ({sign_str}{new_a:,.0f})"
-                    else:
+                        old_target = r.get('_running_bal', 0)
+                        balance_change = new_a - old_target
+                        r['amount'] += balance_change
+                        sign_str = "+" if r['amount'] >= 0 else ""
+                        r['action'] = f"更新權益數 ({sign_str}{r['amount']:,.0f})"
+                    elif action == '建立':
+                        old_target = r.get('_running_bal', 0)
+                        balance_change = new_a - old_target
+                        cost_change = balance_change
                         r['amount'] = new_a
+                    else:
+                        old_delta = abs(r['amount'])
+                        diff = new_a - old_delta
+                        if "減少" in action or "出金" in action:
+                            balance_change = -diff
+                            cost_change = -diff if "出金" in action else 0
+                        else:
+                            balance_change = diff
+                            cost_change = diff if "入金" in action else 0
+                        r['amount'] = new_a
+                    
+                    acc['balance'] += balance_change
+                    if category_name == "margin":
+                        acc['cost'] = acc.get("cost", acc["balance"]) + cost_change
+                        
+                    r['date'] = new_date
                     r['note'] = new_note
                     
+                    for hr in acc['history']: hr.pop('_running_bal', None)
                     save_data(f"{category_name}_accounts", st.session_state[f"{category_name}_accounts"])
                     st.session_state.edit_hist_id = None
                     st.rerun()
@@ -722,23 +753,31 @@ def render_account_history(acc, category_name):
             if hc2.button("✏️", key=f"he_{category_name}_{acc['id']}_{true_idx}"):
                 st.session_state.edit_hist_id = f"{category_name}_{acc['id']}_{true_idx}"
                 st.rerun()
-            if hc3.button("🗑️", key=f"hd_{category_name}_{acc['id']}_{true_idx}"):
+            if hc3.button("🗑️", key=f"hdel_{category_name}_{acc['id']}_{true_idx}"):
                 action = r['action']
-                old_amt = abs(r['amount'])
+                old_amt = r['amount']
                 
-                if "編輯" not in action:
-                    if "減少" in action or "出金" in action or ("更新權益數" in action and "-" in action):
-                        balance_change = old_amt
-                        cost_change = old_amt if "出金" in action else 0
+                if "更新權益數" in action:
+                    balance_change = -old_amt
+                    cost_change = 0
+                elif action == '建立':
+                    balance_change = -old_amt
+                    cost_change = -old_amt
+                else:
+                    abs_old = abs(old_amt)
+                    if "減少" in action or "出金" in action:
+                        balance_change = abs_old
+                        cost_change = abs_old if "出金" in action else 0
                     else:
-                        balance_change = -old_amt
-                        cost_change = -old_amt if ("入金" in action or "建立" in action) else 0
+                        balance_change = -abs_old
+                        cost_change = -abs_old if "入金" in action else 0
                         
-                    acc['balance'] += balance_change
-                    if category_name == "margin":
-                        acc['cost'] += cost_change
-                        
+                acc['balance'] += balance_change
+                if category_name == "margin":
+                    acc['cost'] = acc.get("cost", acc["balance"]) + cost_change
+                    
                 acc["history"].pop(true_idx)
+                for hr in acc['history']: hr.pop('_running_bal', None)
                 save_data(f"{category_name}_accounts", st.session_state[f"{category_name}_accounts"])
                 st.rerun()
 
