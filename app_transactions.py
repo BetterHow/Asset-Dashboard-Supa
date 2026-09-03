@@ -151,6 +151,10 @@ usd_twd = get_rate("USDTWD=X") or 32.4
 btc_usd = get_rate("BTC-USD") or 95000.0
 EXTRA_RATES = {"EUR/TWD": "EURTWD=X", "JPY/TWD": "JPYTWD=X", "GBP/TWD": "GBPTWD=X", "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD"}
 
+def safe_float(text):
+    try: return float(text) if str(text).strip() else None
+    except Exception: return None
+
 def get_latest_price(ticker: str):
     if not ticker: return None
     t = ticker.strip().upper()
@@ -481,13 +485,9 @@ def calculate_holdings(transactions):
                 "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
                 "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
                 "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
-                "is_cash": False, "is_margin": False 
+                "is_cash": False, "is_margin": False
             })
     return result
-
-def safe_float(text):
-    try: return float(text) if str(text).strip() else None
-    except Exception: return None
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
@@ -691,7 +691,6 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -709,10 +708,20 @@ with st.sidebar:
     note = st.text_input("備註", key="note_input")
 
     if st.button("儲存", type="primary", use_container_width=True):
-        q, p = safe_float(qty_str), safe_float(price_str)
-        if p is None and ticker and len(str(ticker).strip())>=2: p = get_latest_price(str(ticker))
+        # 🟢 修復 0 值被拒絕的 Bug：將判斷全面改為嚴格 is not None
+        q = safe_float(qty_str)
+        p = safe_float(price_str)
         is_prem = action in ["Sell Put", "Covered Call", "配息"]
-        vq, vp = (q is not None and q>=0) if is_prem else (q is not None and q>0), (p is not None) if is_prem else (p is not None and p>=0)
+        
+        # 🟢 新增防呆：配息時如果留白數量，自動預設為 0
+        if is_prem and q is None:
+            q = 0.0
+            
+        if p is None and ticker and len(str(ticker).strip())>=2: 
+            p = get_latest_price(str(ticker))
+            
+        vq = (q is not None and q >= 0) if is_prem else (q is not None and q > 0)
+        vp = (p is not None) if is_prem else (p is not None and p >= 0)
         
         if name and vq and vp:
             st.session_state.transactions.append({
@@ -731,6 +740,7 @@ with st.sidebar:
             save_data("history_snapshots", {})
             st.success("歷史快照已清除！請點擊上方重新整理。")
 
+# 🟢 歷史紀錄 UI
 def format_hist_row(r, privacy):
     sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
     raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
@@ -739,6 +749,7 @@ def format_hist_row(r, privacy):
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
     return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
+# 🟢 核心功能：獨立歷史紀錄編輯與還原邏輯
 def render_account_history(acc, category_name):
     history_list = acc.get("history", [])
     if not history_list:
@@ -918,7 +929,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
         safe_unit = unit.replace("$", "&#36;")
         cash_str = f"{safe_unit} {cash_total_display:,.0f}" if display_currency != "BTC" else f"{safe_unit} {cash_total_display:,.4f}"
         
-        # 🟢 標題與彈出式新增按鈕並排
         c_head1, c_head2 = st.columns([5.5, 2.0])
         with c_head1:
             st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>現金總額： {mask_val(cash_str)}</div>", unsafe_allow_html=True)
@@ -1030,10 +1040,9 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
-            st.caption("尚無帳戶，請在上方新增。")
+            st.caption("尚無帳戶，請點選右上角新增。")
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-        # 🟢 圖表現在完全獨立在清單外
         if not cash_df.empty and cash_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
@@ -1111,7 +1120,6 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
         pnl_clr = "#4ade80" if pnl_val >= 0 else "#ef4444"
         pnl_str = f"{sgn}{safe_unit} {pnl_val:,.0f} ({sgn}{pnl_pct:.2f}%)" if display_currency != "BTC" else f"{sgn}{safe_unit} {pnl_val:,.4f} ({sgn}{pnl_pct:.2f}%)"
 
-        # 🟢 標題與彈出式新增按鈕並排
         c_head1, c_head2 = st.columns([5.5, 2.0])
         with c_head1:
             st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>期貨權益數總額： {mask_val(bal_str)} <span style='font-size: 18px; color: {pnl_clr}; font-weight: normal;'>｜ 累積損益： {mask_val(pnl_str)}</span></div>", unsafe_allow_html=True)
@@ -1186,7 +1194,7 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                 elif st.session_state.adjust_margin_id == acc["id"]:
                     c1, c2, c3, c4, c5 = st.columns([2.5, 1.5, 2.0, 1, 1])
                     adj_type = c1.selectbox("動作類型", ["🎯 更新權益數 (操作損益)", "📥 入金 (增加本金與餘額)", "📤 出金 (減少本金與餘額)"], key=f"adj_tm_{acc['id']}", label_visibility="collapsed")
-                    adj_input = c2.text_input("數額", key=f"adj_val_{acc['id']}", label_visibility="collapsed", placeholder="最新權益數或金額")
+                    adj_input = c2.text_input("數額", key=f"adj_val_{acc['id']}", label_visibility="collapsed", placeholder="最新權益數或出入金金額")
                     adj_note = c3.text_input("備註", key=f"adj_notem_{acc['id']}", label_visibility="collapsed", placeholder="選填備註")
                     
                     if c4.button("確認", key=f"save_adjm_{acc['id']}", type="primary", use_container_width=True):
@@ -1248,10 +1256,9 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
-            st.caption("尚無帳戶，請在上方新增。")
+            st.caption("尚無帳戶，請點選右上角新增。")
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-        # 🟢 圖表現在完全獨立在清單外
         if not margin_df.empty and margin_total_bal > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
@@ -1316,7 +1323,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
         lib_str = f"{safe_unit} {lib_total_display:,.0f}" if display_currency != "BTC" else f"{safe_unit} {lib_total_display:,.4f}"
         lev_str = f"{total_value / net_value:.2f} 倍" if net_value > 0 else 'N/A'
         
-        # 🟢 標題與彈出式新增按鈕並排
         c_head1, c_head2 = st.columns([5.5, 2.0])
         with c_head1:
             st.markdown(f"<div style='font-size: 22px; font-weight: bold; margin-bottom: 15px;'>負債總額： {mask_val(lib_str)} <span style='font-size: 18px; color: #94a3b8; font-weight: normal;'>｜ 槓桿比率： {mask_val(lev_str)}</span></div>", unsafe_allow_html=True)
@@ -1428,10 +1434,9 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
-            st.caption("尚無帳戶，請在上方新增。")
+            st.caption("尚無帳戶，請點選右上角新增。")
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-        # 🟢 圖表現在完全獨立在清單外
         if not lib_df.empty and lib_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
@@ -2024,7 +2029,17 @@ if st.session_state.transactions:
                         if b1.button("儲存", key=f"save_tx_{row['id']}", type="primary", use_container_width=True):
                             for idx, t in enumerate(st.session_state.transactions):
                                 if t["id"] == row["id"]:
-                                    st.session_state.transactions[idx].update({"date": new_date.strftime("%Y-%m-%d"), "type": new_type, "name": new_name.strip(), "ticker": new_ticker.strip().upper(), "quantity": safe_float(new_qty) or row["quantity"], "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], "currency": new_curr, "note": new_note})
+                                    # 🟢 修正 0 值編輯 Bug：使用 is not None
+                                    st.session_state.transactions[idx].update({
+                                        "date": new_date.strftime("%Y-%m-%d"), 
+                                        "type": new_type, 
+                                        "name": new_name.strip(), 
+                                        "ticker": new_ticker.strip().upper(), 
+                                        "quantity": safe_float(new_qty) if safe_float(new_qty) is not None else row["quantity"], 
+                                        "price": safe_float(new_price) if safe_float(new_price) is not None else row["price"], 
+                                        "currency": new_curr, 
+                                        "note": new_note
+                                    })
                                     break
                             save_data("transactions", st.session_state.transactions)
                             st.session_state.editing_id = None
