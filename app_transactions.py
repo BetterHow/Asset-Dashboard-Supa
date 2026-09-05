@@ -133,7 +133,8 @@ div[data-testid="stExpander"] details summary p { font-size: 22px !important; fo
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("margin_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
 
-for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("trend_time_range", "1個月")]:
+# 🟢 加入 trend_time_range 的全局記憶預設值
+for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("global_trend_range", "1個月")]:
     if k not in st.session_state: st.session_state[k] = def_val
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -628,11 +629,6 @@ st.divider()
 # 側邊欄
 with st.sidebar:
     st.title("📊 個人資產儀表板")
-    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
-    if st.button("登出金庫", use_container_width=True):
-        supabase.auth.sign_out()
-        st.session_state.user, st.session_state.password = None, None
-        st.cache_data.clear(); st.rerun()
     st.divider()
     
     st.header("新增交易")
@@ -691,6 +687,7 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -708,10 +705,12 @@ with st.sidebar:
     note = st.text_input("備註", key="note_input")
 
     if st.button("儲存", type="primary", use_container_width=True):
+        # 🟢 修復 0 值被拒絕的 Bug：將判斷全面改為嚴格 is not None
         q = safe_float(qty_str)
         p = safe_float(price_str)
         is_prem = action in ["Sell Put", "Covered Call", "配息"]
         
+        # 🟢 新增防呆：配息時如果留白數量，自動預設為 0
         if is_prem and q is None:
             q = 0.0
             
@@ -738,7 +737,6 @@ with st.sidebar:
             save_data("history_snapshots", {})
             st.success("歷史快照已清除！請點擊上方重新整理。")
 
-# 🟢 歷史紀錄 UI
 def format_hist_row(r, privacy):
     sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
     raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
@@ -747,7 +745,6 @@ def format_hist_row(r, privacy):
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
     return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
-# 🟢 核心功能：獨立歷史紀錄編輯與還原邏輯
 def render_account_history(acc, category_name):
     history_list = acc.get("history", [])
     if not history_list:
@@ -1624,8 +1621,16 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
 
             cr, cp = st.columns([2.5, 1.5])
             with cr:
-                # 🟢 修正：加入 key="trend_time_range" 保持全域狀態記憶
-                tr = st.radio("選擇時間區間", ["1週", "1個月", "3個月", "半年", "1年", "全部"], key="trend_time_range", horizontal=True, label_visibility="collapsed")
+                # 🟢 全域記憶時間區間邏輯
+                options = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
+                current_val = st.session_state.global_trend_range
+                idx = options.index(current_val) if current_val in options else 1
+                
+                def on_range_change():
+                    st.session_state.global_trend_range = st.session_state.trend_radio_widget
+                    
+                tr = st.radio("選擇時間區間", options, index=idx, key="trend_radio_widget", horizontal=True, label_visibility="collapsed", on_change=on_range_change)
+                
             tdy = pd.to_datetime(date.today())
             sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else hdf['Date'].min() - pd.Timedelta(days=3)
             
@@ -1777,7 +1782,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             else: st.dataframe(d_closed, use_container_width=True, hide_index=True, column_config=col_cfg)
 
         if not d_prem.empty:
-            st.markdown("<h5 style='color:#c084fc; margin-bottom:5px; margin-top:20px;'>🟣 未建倉 (純收權利金 / 配息)</h5>", unsafe_allow_html=True)
+            st.markdown("<h5 style='color:#c084fc; margin-bottom:5px; margin-top:20px;'>🟣 未建倉 (純收權利金 /配息)</h5>", unsafe_allow_html=True)
             if privacy:
                 m_df = d_prem.copy()
                 for c in cols:
