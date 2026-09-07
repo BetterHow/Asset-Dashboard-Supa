@@ -81,31 +81,13 @@ if st.session_state.user is None:
     with col2:
         tab_login, tab_reg = st.tabs(["登入", "註冊新帳號"])
         with tab_login:
-            saved_email = ""
-            try:
-                if os.path.exists("remembered_email.txt"):
-                    with open("remembered_email.txt", "r", encoding="utf-8") as f:
-                        saved_email = f.read().strip()
-            except Exception:
-                pass
-                
-            login_email = st.text_input("Email", value=saved_email, key="l_email")
+            # 🟢 已移除伺服器端 shared text file 的記憶邏輯，改交由瀏覽器原生管理
+            login_email = st.text_input("Email", key="l_email")
             login_pwd = st.text_input("密碼", type="password", key="l_pwd")
-            remember_me = st.checkbox("記住帳號", value=bool(saved_email))
             
             if st.button("登入金庫", use_container_width=True, type="primary"):
                 try:
                     res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pwd})
-                    try:
-                        if remember_me:
-                            with open("remembered_email.txt", "w", encoding="utf-8") as f:
-                                f.write(login_email.strip())
-                        else:
-                            if os.path.exists("remembered_email.txt"):
-                                os.remove("remembered_email.txt")
-                    except Exception:
-                        pass
-                        
                     st.session_state.user, st.session_state.password = res.user, login_pwd
                     st.rerun()
                 except Exception: st.error("登入失敗，請確認帳號密碼是否正確。")
@@ -133,7 +115,6 @@ div[data-testid="stExpander"] details summary p { font-size: 22px !important; fo
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("margin_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
 
-# 🟢 加入 trend_time_range 的全局記憶預設值
 for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("global_trend_range", "1個月")]:
     if k not in st.session_state: st.session_state[k] = def_val
 
@@ -490,8 +471,6 @@ def calculate_holdings(transactions):
             })
     return result
 
-def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
-
 def format_dynamic_qty(qty, price, currency):
     if pd.isna(qty) or qty is None: return "—"
     try: qty_val = float(qty)
@@ -516,6 +495,8 @@ def fmt(num, decimals=2):
     if pd.isna(num) or num is None: return "—"
     if isinstance(num, (int, float)) and 0 < num < 1: return f"{num:,.4f}"
     return f"{num:,.{decimals}f}"
+
+def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
 # ========================================================
 # 🚀 核心資料與數值預先計算區 (⚡極速向量化優化)
@@ -629,6 +610,11 @@ st.divider()
 # 側邊欄
 with st.sidebar:
     st.title("📊 個人資產儀表板")
+    st.markdown(f"<div style='color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 5px;'>🔓 已登入：{st.session_state.user.email}</div>", unsafe_allow_html=True)
+    if st.button("登出金庫", use_container_width=True):
+        supabase.auth.sign_out()
+        st.session_state.user, st.session_state.password = None, None
+        st.cache_data.clear(); st.rerun()
     st.divider()
     
     st.header("新增交易")
@@ -687,7 +673,6 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -705,12 +690,10 @@ with st.sidebar:
     note = st.text_input("備註", key="note_input")
 
     if st.button("儲存", type="primary", use_container_width=True):
-        # 🟢 修復 0 值被拒絕的 Bug：將判斷全面改為嚴格 is not None
         q = safe_float(qty_str)
         p = safe_float(price_str)
         is_prem = action in ["Sell Put", "Covered Call", "配息"]
         
-        # 🟢 新增防呆：配息時如果留白數量，自動預設為 0
         if is_prem and q is None:
             q = 0.0
             
@@ -913,7 +896,7 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             for acc in st.session_state.cash_accounts:
                 twd_bal = acc["balance"] if acc["currency"] == "TWD" else acc["balance"] * usd_twd
                 disp_bal = twd_bal if display_currency == "TWD" else twd_bal / usd_twd if display_currency == "USD" else (twd_bal / usd_twd) / btc_usd if btc_usd else twd_bal
-                cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "顯示金額": disp_bal})
+                cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "显示金額": disp_bal})
             
             cash_df = pd.DataFrame(cash_df_list)
             cash_df = cash_df.sort_values(by="顯示金額", ascending=False)
@@ -1652,7 +1635,6 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                 fdf['PnL'] = fdf['Value'] - fdf['Cost']
                 unit_str = unit.replace("$", "&#36;")
                 
-                # 🟢 修正打字錯誤：修復 f-string 引號
                 def get_val_text_global(x):
                     if x < 0: return f"<span style='color:#ef4444'>-{unit_str} {abs(x):,.0f}</span>"
                     elif x > 0: return f"<span style='color:#4ade80'>+{unit_str} {x:,.0f}</span>"
@@ -1782,7 +1764,7 @@ with st.expander("點此展開 / 收合明細表", expanded=False):
             else: st.dataframe(d_closed, use_container_width=True, hide_index=True, column_config=col_cfg)
 
         if not d_prem.empty:
-            st.markdown("<h5 style='color:#c084fc; margin-bottom:5px; margin-top:20px;'>🟣 未建倉 (純收權利金 /配息)</h5>", unsafe_allow_html=True)
+            st.markdown("<h5 style='color:#c084fc; margin-bottom:5px; margin-top:20px;'>🟣 未建倉 (純收權利金 / 配息)</h5>", unsafe_allow_html=True)
             if privacy:
                 m_df = d_prem.copy()
                 for c in cols:
