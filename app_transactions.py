@@ -81,24 +81,30 @@ if st.session_state.user is None:
     with col2:
         tab_login, tab_reg = st.tabs(["登入", "註冊新帳號"])
         with tab_login:
-            # 🟢 已移除伺服器端 shared text file 的記憶邏輯，改交由瀏覽器原生管理
-            login_email = st.text_input("Email", key="l_email")
-            login_pwd = st.text_input("密碼", type="password", key="l_pwd")
-            
-            if st.button("登入金庫", use_container_width=True, type="primary"):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pwd})
-                    st.session_state.user, st.session_state.password = res.user, login_pwd
-                    st.rerun()
-                except Exception: st.error("登入失敗，請確認帳號密碼是否正確。")
+            # 🟢 升級為 Form 表單，解決瀏覽器自動填入未觸發更新的問題
+            with st.form("login_form"):
+                login_email = st.text_input("Email", key="l_email", autocomplete="username")
+                login_pwd = st.text_input("密碼", type="password", key="l_pwd", autocomplete="current-password")
+                submitted = st.form_submit_button("登入金庫", type="primary", use_container_width=True)
+                
+                if submitted:
+                    try:
+                        res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pwd})
+                        st.session_state.user, st.session_state.password = res.user, login_pwd
+                        st.rerun()
+                    except Exception: 
+                        st.error("登入失敗，請確認帳號密碼是否正確。")
         with tab_reg:
-            reg_email = st.text_input("Email", key="r_email")
-            reg_pwd = st.text_input("密碼 (請牢記！作為加密鑰匙，遺失將永遠無法解密資料)", type="password", key="r_pwd")
-            if st.button("註冊帳號", use_container_width=True):
-                try:
-                    supabase.auth.sign_up({"email": reg_email, "password": reg_pwd})
-                    st.success("註冊成功！如果 Supabase 預設開啟信箱驗證，請先去收信驗證後登入。")
-                except Exception as e: st.error(f"註冊失敗: {e}")
+            with st.form("reg_form"):
+                reg_email = st.text_input("Email", key="r_email", autocomplete="email")
+                reg_pwd = st.text_input("密碼 (請牢記！作為加密鑰匙，遺失將永遠無法解密資料)", type="password", key="r_pwd", autocomplete="new-password")
+                reg_submitted = st.form_submit_button("註冊帳號", use_container_width=True)
+                if reg_submitted:
+                    try:
+                        supabase.auth.sign_up({"email": reg_email, "password": reg_pwd})
+                        st.success("註冊成功！如果 Supabase 預設開啟信箱驗證，請先去收信驗證後登入。")
+                    except Exception as e: 
+                        st.error(f"註冊失敗: {e}")
     st.stop()
 
 # ========================================================
@@ -673,6 +679,7 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
+        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -690,10 +697,12 @@ with st.sidebar:
     note = st.text_input("備註", key="note_input")
 
     if st.button("儲存", type="primary", use_container_width=True):
+        # 🟢 修復 0 值被拒絕的 Bug：將判斷全面改為嚴格 is not None
         q = safe_float(qty_str)
         p = safe_float(price_str)
         is_prem = action in ["Sell Put", "Covered Call", "配息"]
         
+        # 🟢 新增防呆：配息時如果留白數量，自動預設為 0
         if is_prem and q is None:
             q = 0.0
             
@@ -720,6 +729,7 @@ with st.sidebar:
             save_data("history_snapshots", {})
             st.success("歷史快照已清除！請點擊上方重新整理。")
 
+# 🟢 歷史紀錄 UI
 def format_hist_row(r, privacy):
     sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
     raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
@@ -728,6 +738,7 @@ def format_hist_row(r, privacy):
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
     return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
+# 🟢 核心功能：獨立歷史紀錄編輯與還原邏輯
 def render_account_history(acc, category_name):
     history_list = acc.get("history", [])
     if not history_list:
@@ -896,7 +907,8 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             for acc in st.session_state.cash_accounts:
                 twd_bal = acc["balance"] if acc["currency"] == "TWD" else acc["balance"] * usd_twd
                 disp_bal = twd_bal if display_currency == "TWD" else twd_bal / usd_twd if display_currency == "USD" else (twd_bal / usd_twd) / btc_usd if btc_usd else twd_bal
-                cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "显示金額": disp_bal})
+                # 🟢 修正："显示金額" 打錯字修復為 "顯示金額" 以避免 KeyError
+                cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "顯示金額": disp_bal})
             
             cash_df = pd.DataFrame(cash_df_list)
             cash_df = cash_df.sort_values(by="顯示金額", ascending=False)
