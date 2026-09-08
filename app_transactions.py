@@ -365,19 +365,34 @@ def recalculate_history():
     progress_text = "抓取並壓縮歷史報價中..."
     my_bar = st.progress(0, text=progress_text)
     
-    for i, symbol in enumerate(all_symbols):
-        my_bar.progress((i + 1) / len(all_symbols), text=f"{progress_text} ({symbol})")
-        try:
-            tk_data = yf.Ticker(symbol).history(start=earliest_date - timedelta(days=7), auto_adjust=False)
-            if not tk_data.empty:
-                if tk_data.index.tz is not None:
-                    tk_data.index = tk_data.index.tz_localize(None)
-                tk_data.index = tk_data.index.normalize()
-                old_k = tk_data[tk_data.index < cutoff].resample('W-MON').last()
-                new_k = tk_data[tk_data.index >= cutoff]
-                comb = pd.concat([old_k, new_k])['Close'].ffill()
-                price_cache[symbol] = comb
-        except: pass
+    # 🟢 修復：加入自動後綴判定，確保 yfinance 能抓到台股資料
+    for i, raw_symbol in enumerate(all_symbols):
+        my_bar.progress((i + 1) / len(all_symbols), text=f"{progress_text} ({raw_symbol})")
+        
+        cands = [raw_symbol]
+        if raw_symbol not in ["USDTWD=X", "BTC-USD"]:
+            cl = raw_symbol.replace(".TW", "").replace(".TWO", "")
+            is_tw = cl.isdigit() or (len(cl) > 1 and cl[:-1].isdigit() and cl[-1] in ["B", "L", "R"])
+            if is_tw:
+                cands = [f"{cl}.TW", f"{cl}.TWO"]
+            elif not raw_symbol.endswith((".TW", ".TWO")) and raw_symbol.isalnum() and not raw_symbol.isalpha():
+                cands = [raw_symbol, f"{raw_symbol}.TW", f"{raw_symbol}.TWO"]
+                
+        for sym in cands:
+            try:
+                tk_data = yf.Ticker(sym).history(start=earliest_date - timedelta(days=7), auto_adjust=False)
+                if not tk_data.empty:
+                    if tk_data.index.tz is not None:
+                        tk_data.index = tk_data.index.tz_localize(None)
+                    tk_data.index = tk_data.index.normalize()
+                    old_k = tk_data[tk_data.index < cutoff].resample('W-MON').last()
+                    new_k = tk_data[tk_data.index >= cutoff]
+                    comb = pd.concat([old_k, new_k])['Close'].ffill()
+                    # 必須用原始的 raw_symbol 當 key，後續查價才對得起來
+                    price_cache[raw_symbol] = comb 
+                    break 
+            except: 
+                pass
             
     new_snaps = {}
     curr_d = earliest_date
@@ -515,7 +530,6 @@ def fmt(num, decimals=2):
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
-# 🟢 補回核心帳戶歷史明細渲染函式，絕不再遺漏
 def format_hist_row(r, privacy):
     sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
     raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
@@ -1183,7 +1197,7 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
         
-        # 🟢 已經 100% 確保圖表區塊在 `for acc in sorted_cash_accounts:` 迴圈之外！
+        # 🟢 修正：徹底將圖表邏輯退出資料迴圈外，不再重複創建圖表造成記憶體爆炸
         if not cash_df.empty and cash_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
