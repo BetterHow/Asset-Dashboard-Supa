@@ -81,7 +81,6 @@ if st.session_state.user is None:
     with col2:
         tab_login, tab_reg = st.tabs(["登入", "註冊新帳號"])
         with tab_login:
-            # 🟢 升級為 Form 表單，解決瀏覽器自動填入未觸發更新的問題
             with st.form("login_form"):
                 login_email = st.text_input("Email", key="l_email", autocomplete="username")
                 login_pwd = st.text_input("密碼", type="password", key="l_pwd", autocomplete="current-password")
@@ -172,7 +171,9 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
         try:
             hist = yf.Ticker(sym).history(start=start_date, auto_adjust=False)
             if not hist.empty:
-                hist.index = hist.index.tz_localize(None).normalize()
+                if hist.index.tz is not None:
+                    hist.index = hist.index.tz_localize(None)
+                hist.index = hist.index.normalize()
                 return hist
         except: continue
     return pd.DataFrame()
@@ -189,8 +190,94 @@ def fetch_all_prices(tickers: tuple):
     return results
 
 # ========================================================
-# 🚀 時光機：動態歷史快照回溯修補引擎
+# 🚀 核心邏輯：計算庫存與時光機修補
 # ========================================================
+def calculate_holdings(transactions):
+    holdings = {}
+    for t in transactions:
+        key = t.get("ticker") or t.get("name")
+        if not key: continue
+        if key not in holdings:
+            holdings[key] = {"名稱": t.get("name", key), "代號": t.get("ticker", ""), "幣別": t.get("currency", "TWD"), "類型": t.get("type_category", "其他"), "數量": 0.0, "avg_cost": 0.0, "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0}
+        
+        h, qty, price, action = holdings[key], float(t.get("quantity", 0)), float(t.get("price", 0)), t["type"]
+        
+        if action in ["Sell Put", "Covered Call", "配息"]:
+            amount = price if qty == 0 else qty * price
+            if action == "Covered Call": 
+                h["CC權利金"] += amount; h["已實現損益"] += amount
+            elif action == "Sell Put": 
+                h["SP權利金"] += amount; h["已實現損益"] += amount
+            elif action == "配息": 
+                h["股息"] += amount; h["已實現損益"] += amount
+                if qty > 0:
+                    h["歷史買進數量"] += qty
+                    if h["數量"] >= 0: 
+                        new_qty = h["數量"] + qty
+                        h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / new_qty if new_qty > 0 else 0
+                        h["數量"] = new_qty
+                    else: 
+                        cover_qty = min(qty, abs(h["數量"]))
+                        h["已實現損益"] += (h["avg_cost"] - price) * cover_qty 
+                        h["數量"] += cover_qty
+                        remaining_buy = qty - cover_qty
+                        if remaining_buy > 0: 
+                            h["數量"] = remaining_buy
+                            h["avg_cost"] = price
+                        elif abs(h["數量"]) < 1e-5:
+                            h["數量"] = 0.0
+                            h["avg_cost"] = 0.0
+            continue
+
+        if action == "買進":
+            h["歷史買進數量"] += qty
+            if h["數量"] >= 0: 
+                new_qty = h["數量"] + qty
+                h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / new_qty if new_qty > 0 else 0
+                h["數量"] = new_qty
+            else: 
+                cover_qty = min(qty, abs(h["數量"]))
+                h["已實現損益"] += (h["avg_cost"] - price) * cover_qty 
+                h["數量"] += cover_qty
+                remaining_buy = qty - cover_qty
+                if remaining_buy > 0: 
+                    h["數量"] = remaining_buy
+                    h["avg_cost"] = price
+                elif abs(h["數量"]) < 1e-5:
+                    h["數量"] = 0.0
+                    h["avg_cost"] = 0.0
+                    
+        elif action == "賣出":
+            h["歷史賣出數量"] += qty
+            if h["數量"] <= 0: 
+                new_qty_abs = abs(h["數量"]) + qty
+                h["avg_cost"] = (abs(h["數量"]) * h["avg_cost"] + qty * price) / new_qty_abs if new_qty_abs > 0 else 0
+                h["數量"] -= qty
+            else: 
+                sell_qty = min(qty, h["數量"])
+                h["已實現損益"] += (price - h["avg_cost"]) * sell_qty 
+                h["數量"] -= sell_qty
+                remaining_sell = qty - sell_qty
+                if remaining_sell > 0: 
+                    h["數量"] = -remaining_sell
+                    h["avg_cost"] = price
+                elif abs(h["數量"]) < 1e-5:
+                    h["數量"] = 0.0
+                    h["avg_cost"] = 0.0
+
+    result = []
+    for key, h in holdings.items():
+        h["原始總成本"] = h["數量"] * h["avg_cost"] 
+        if abs(h["數量"]) > 0.0001 or h["CC權利金"] > 0 or h["SP權利金"] > 0 or h["股息"] > 0 or h["已實現損益"] != 0 or h["歷史買進數量"] > 0 or h["歷史賣出數量"] > 0:
+            result.append({
+                "名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"],
+                "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
+                "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
+                "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
+                "is_cash": False, "is_margin": False
+            })
+    return result
+
 def apply_history_patch(date_str, acc_type, acc_curr, balance_diff, cost_diff):
     if not st.session_state.history_snapshots: return
     if balance_diff == 0 and cost_diff == 0: return
@@ -252,6 +339,154 @@ def get_impact(action, amount, cat_name):
         cost_impact = 0
         
     return bal_impact, cost_impact
+
+def recalculate_history():
+    earliest_date = date.today()
+    for t in st.session_state.transactions:
+        try:
+            d = datetime.strptime(t["date"], "%Y-%m-%d").date()
+            if d < earliest_date: earliest_date = d
+        except: pass
+    for accs in [st.session_state.cash_accounts, st.session_state.margin_accounts, st.session_state.liabilities_accounts]:
+        for a in accs:
+            for h in a.get("history", []):
+                try:
+                    d = datetime.strptime(h["date"][:10], "%Y-%m-%d").date()
+                    if d < earliest_date: earliest_date = d
+                except: pass
+                
+    tickers = list(set([t["ticker"] for t in st.session_state.transactions if t.get("ticker")]))
+    tickers = [t for t in tickers if len(t) >= 2]
+    
+    price_cache = {}
+    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=30)
+    all_symbols = tickers + ["USDTWD=X", "BTC-USD"]
+    
+    progress_text = "抓取並壓縮歷史報價中..."
+    my_bar = st.progress(0, text=progress_text)
+    
+    for i, symbol in enumerate(all_symbols):
+        my_bar.progress((i + 1) / len(all_symbols), text=f"{progress_text} ({symbol})")
+        try:
+            tk_data = yf.Ticker(symbol).history(start=earliest_date - timedelta(days=7), auto_adjust=False)
+            if not tk_data.empty:
+                if tk_data.index.tz is not None:
+                    tk_data.index = tk_data.index.tz_localize(None)
+                tk_data.index = tk_data.index.normalize()
+                old_k = tk_data[tk_data.index < cutoff].resample('W-MON').last()
+                new_k = tk_data[tk_data.index >= cutoff]
+                comb = pd.concat([old_k, new_k])['Close'].ffill()
+                price_cache[symbol] = comb
+        except: pass
+            
+    new_snaps = {}
+    curr_d = earliest_date
+    today = date.today()
+    total_days = (today - curr_d).days + 1
+    day_count = 0
+    
+    my_bar.progress(0, text="重算每日淨值中...")
+    
+    while curr_d <= today:
+        d_str = curr_d.strftime("%Y-%m-%d")
+        d_ts = pd.Timestamp(curr_d)
+        
+        def get_p(tk, def_val):
+            if tk in price_cache:
+                avail = price_cache[tk][price_cache[tk].index <= d_ts]
+                if not avail.empty: return float(avail.iloc[-1])
+            return def_val
+            
+        day_usd_twd = get_p("USDTWD=X", 32.4)
+        day_btc_usd = get_p("BTC-USD", 95000.0)
+        
+        day_txs = [t for t in st.session_state.transactions if t["date"] <= d_str]
+        day_holds = calculate_holdings(day_txs)
+        
+        cv_twd = 0.0
+        cc_twd = 0.0
+        cats = {}
+        
+        for h in day_holds:
+            tk = h["代號"]
+            curr = h["幣別"]
+            qty = h["數量"]
+            cat = h["類型"]
+            
+            rate_to_twd = day_usd_twd if curr == "USD" else (day_btc_usd * day_usd_twd if curr == "BTC" else 1.0)
+            p = get_p(tk, h["avg_cost"]) if tk else h["avg_cost"]
+            val = qty * p
+            cost = h["原始總成本"] - h["CC權利金"] - h["SP權利金"] - h["股息"] if st.session_state.get("include_premium", False) else h["原始總成本"]
+            
+            v_twd = val * rate_to_twd
+            c_twd = cost * rate_to_twd
+            
+            cv_twd += v_twd
+            cc_twd += c_twd
+            
+            if cat not in cats: cats[cat] = {"value": 0.0, "cost": 0.0}
+            cats[cat]["value"] += v_twd
+            cats[cat]["cost"] += c_twd
+
+        def get_acc_bals(accounts):
+            tot_val, tot_cost = 0.0, 0.0
+            for acc in accounts:
+                bal, cost = 0.0, 0.0
+                for ah in sorted(acc.get("history", []), key=lambda x: x["date"]):
+                    if ah["date"][:10] <= d_str:
+                        act = ah['action']
+                        amt = ah['amount']
+                        if "更新權益數" in act: bal += amt
+                        elif act == '建立': bal += amt; cost += amt
+                        else:
+                            if "減少" in act or "出金" in act: 
+                                bal -= abs(amt); cost -= (abs(amt) if "出金" in act else 0)
+                            else: 
+                                bal += abs(amt); cost += (abs(amt) if "入金" in act else 0)
+                rate = day_usd_twd if acc["currency"] == "USD" else (day_btc_usd * day_usd_twd if acc["currency"] == "BTC" else 1.0)
+                tot_val += bal * rate
+                tot_cost += cost * rate
+            return tot_val, tot_cost
+
+        cash_v, cash_c = get_acc_bals(st.session_state.cash_accounts)
+        margin_v, margin_c = get_acc_bals(st.session_state.margin_accounts)
+        liab_v, _ = get_acc_bals(st.session_state.liabilities_accounts)
+        
+        cv_twd += cash_v + margin_v
+        cc_twd += cash_c + margin_c
+        
+        if "現金" not in cats: cats["現金"] = {"value": 0.0, "cost": 0.0}
+        cats["現金"]["value"] += cash_v
+        cats["現金"]["cost"] += cash_c
+        
+        if "期貨" not in cats: cats["期貨"] = {"value": 0.0, "cost": 0.0}
+        cats["期貨"]["value"] += margin_v
+        cats["期貨"]["cost"] += margin_c
+
+        snap = {"version": "v2"}
+        for d_cur in ["TWD", "USD", "BTC"]:
+            factor = 1.0 if d_cur == "TWD" else (1.0 / day_usd_twd) if d_cur == "USD" else (1.0 / (day_btc_usd * day_usd_twd))
+            cur_cats = {}
+            for c_k, c_v in cats.items():
+                cur_cats[c_k] = {"value": round(c_v["value"] * factor, 2), "cost": round(c_v["cost"] * factor, 2)}
+            
+            snap[d_cur] = {
+                "value": round(cv_twd * factor, 2),
+                "cost": round(cc_twd * factor, 2),
+                "liability": round(liab_v * factor, 2),
+                "categories": cur_cats
+            }
+            
+        new_snaps[d_str] = snap
+        curr_d += timedelta(days=1)
+        day_count += 1
+        my_bar.progress(day_count / total_days, text=f"重算每日淨值中... {d_str}")
+        
+    my_bar.empty()
+    st.session_state.history_snapshots = new_snaps
+    save_data("history_snapshots", new_snaps)
+    st.success("✅ 歷史淨值已全部重新結算完成！")
+    st.rerun()
 
 # ========================================================
 # ⚡ 效能優化：Plotly 圖表建構快取
@@ -388,95 +623,6 @@ def _prepare_trend_hist_data(history_json: str, selected_cat, display_currency: 
             hist_d.append({'Date': d_str, 'Value': val - liab, 'Cost': 0})
     return hist_d
 
-# ========================================================
-# 🚀 做空與多頭會計核心引擎
-# ========================================================
-def calculate_holdings(transactions):
-    holdings = {}
-    for t in transactions:
-        key = t.get("ticker") or t.get("name")
-        if not key: continue
-        if key not in holdings:
-            holdings[key] = {"名稱": t.get("name", key), "代號": t.get("ticker", ""), "幣別": t.get("currency", "TWD"), "類型": t.get("type_category", "其他"), "數量": 0.0, "avg_cost": 0.0, "CC權利金": 0.0, "SP權利金": 0.0, "股息": 0.0, "已實現損益": 0.0, "歷史買進數量": 0.0, "歷史賣出數量": 0.0}
-        
-        h, qty, price, action = holdings[key], float(t.get("quantity", 0)), float(t.get("price", 0)), t["type"]
-        
-        if action in ["Sell Put", "Covered Call", "配息"]:
-            amount = price if qty == 0 else qty * price
-            if action == "Covered Call": 
-                h["CC權利金"] += amount; h["已實現損益"] += amount
-            elif action == "Sell Put": 
-                h["SP權利金"] += amount; h["已實現損益"] += amount
-            elif action == "配息": 
-                h["股息"] += amount; h["已實現損益"] += amount
-                if qty > 0:
-                    h["歷史買進數量"] += qty
-                    if h["數量"] >= 0: 
-                        new_qty = h["數量"] + qty
-                        h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / new_qty if new_qty > 0 else 0
-                        h["數量"] = new_qty
-                    else: 
-                        cover_qty = min(qty, abs(h["數量"]))
-                        h["已實現損益"] += (h["avg_cost"] - price) * cover_qty 
-                        h["數量"] += cover_qty
-                        remaining_buy = qty - cover_qty
-                        if remaining_buy > 0: 
-                            h["數量"] = remaining_buy
-                            h["avg_cost"] = price
-                        elif abs(h["數量"]) < 1e-5:
-                            h["數量"] = 0.0
-                            h["avg_cost"] = 0.0
-            continue
-
-        if action == "買進":
-            h["歷史買進數量"] += qty
-            if h["數量"] >= 0: 
-                new_qty = h["數量"] + qty
-                h["avg_cost"] = (h["數量"] * h["avg_cost"] + qty * price) / new_qty if new_qty > 0 else 0
-                h["數量"] = new_qty
-            else: 
-                cover_qty = min(qty, abs(h["數量"]))
-                h["已實現損益"] += (h["avg_cost"] - price) * cover_qty 
-                h["數量"] += cover_qty
-                remaining_buy = qty - cover_qty
-                if remaining_buy > 0: 
-                    h["數量"] = remaining_buy
-                    h["avg_cost"] = price
-                elif abs(h["數量"]) < 1e-5:
-                    h["數量"] = 0.0
-                    h["avg_cost"] = 0.0
-                    
-        elif action == "賣出":
-            h["歷史賣出數量"] += qty
-            if h["數量"] <= 0: 
-                new_qty_abs = abs(h["數量"]) + qty
-                h["avg_cost"] = (abs(h["數量"]) * h["avg_cost"] + qty * price) / new_qty_abs if new_qty_abs > 0 else 0
-                h["數量"] -= qty
-            else: 
-                sell_qty = min(qty, h["數量"])
-                h["已實現損益"] += (price - h["avg_cost"]) * sell_qty 
-                h["數量"] -= sell_qty
-                remaining_sell = qty - sell_qty
-                if remaining_sell > 0: 
-                    h["數量"] = -remaining_sell
-                    h["avg_cost"] = price
-                elif abs(h["數量"]) < 1e-5:
-                    h["數量"] = 0.0
-                    h["avg_cost"] = 0.0
-
-    result = []
-    for key, h in holdings.items():
-        h["原始總成本"] = h["數量"] * h["avg_cost"] 
-        if abs(h["數量"]) > 0.0001 or h["CC權利金"] > 0 or h["SP權利金"] > 0 or h["股息"] > 0 or h["已實現損益"] != 0 or h["歷史買進數量"] > 0 or h["歷史賣出數量"] > 0:
-            result.append({
-                "名稱": h["名稱"], "代號": h["代號"], "幣別": h["幣別"], "類型": h["類型"],
-                "數量": h["數量"], "原始總成本": h["原始總成本"], "平均價格": h["avg_cost"],
-                "CC權利金": h["CC權利金"], "SP權利金": h["SP權利金"], "股息": h["股息"],
-                "已實現損益": h["已實現損益"], "歷史買進數量": h["歷史買進數量"], "歷史賣出數量": h["歷史賣出數量"], 
-                "is_cash": False, "is_margin": False
-            })
-    return result
-
 def format_dynamic_qty(qty, price, currency):
     if pd.isna(qty) or qty is None: return "—"
     try: qty_val = float(qty)
@@ -501,8 +647,6 @@ def fmt(num, decimals=2):
     if pd.isna(num) or num is None: return "—"
     if isinstance(num, (int, float)) and 0 < num < 1: return f"{num:,.4f}"
     return f"{num:,.{decimals}f}"
-
-def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
 # ========================================================
 # 🚀 核心資料與數值預先計算區 (⚡極速向量化優化)
@@ -679,7 +823,6 @@ with st.sidebar:
     
     if tv_str != st.session_state.prev_ticker:
         clt = tv_str.replace(".TW", "").replace(".TWO", "")
-        # 🟢 已經將「期貨」從一般交易類別中徹底移除
         st.session_state["type_select"] = "債券" if clt.endswith("B") and len(clt)>1 and clt[:-1].isdigit() else "台股" if clt.isdigit() or (len(clt)>1 and clt[:-1].isdigit() and clt[-1] in ["L","R"]) else "加密貨幣" if "-USD" in tv_str else "美股" if tv_str.isalpha() else "其他"
         st.session_state["currency_select"] = "USD" if st.session_state["type_select"] in ["美股", "加密貨幣"] else "TWD"
         st.session_state.prev_ticker = tv_str
@@ -697,12 +840,10 @@ with st.sidebar:
     note = st.text_input("備註", key="note_input")
 
     if st.button("儲存", type="primary", use_container_width=True):
-        # 🟢 修復 0 值被拒絕的 Bug：將判斷全面改為嚴格 is not None
         q = safe_float(qty_str)
         p = safe_float(price_str)
         is_prem = action in ["Sell Put", "Covered Call", "配息"]
         
-        # 🟢 新增防呆：配息時如果留白數量，自動預設為 0
         if is_prem and q is None:
             q = 0.0
             
@@ -723,8 +864,13 @@ with st.sidebar:
 
     st.divider()
     with st.expander("⚙️ 進階設定"):
-        st.caption("當刪除舊紀錄後，圖表並不會自動回溯過去。若你想重置趨勢圖，請使用此功能。")
-        if st.button("🧹 清除所有歷史快照", help="將清空下方的趨勢圖歷史，從今天重新記錄。"):
+        st.caption("當修改過去的交易或帳戶紀錄時，可使用此功能深度回溯並重算所有歷史淨值。")
+        if st.button("🔄 重新結算歷史淨值", help="系統將抓取最新報價，並逐日重演你的所有紀錄，重建最精準的淨值曲線。"):
+            recalculate_history()
+            
+        st.divider()
+        st.caption("危險操作：")
+        if st.button("🧹 清除所有歷史快照", type="secondary"):
             st.session_state.history_snapshots = {}
             save_data("history_snapshots", {})
             st.success("歷史快照已清除！請點擊上方重新整理。")
@@ -738,7 +884,6 @@ def format_hist_row(r, privacy):
     note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
     return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
 
-# 🟢 核心功能：獨立歷史紀錄編輯與還原邏輯
 def render_account_history(acc, category_name):
     history_list = acc.get("history", [])
     if not history_list:
@@ -907,7 +1052,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             for acc in st.session_state.cash_accounts:
                 twd_bal = acc["balance"] if acc["currency"] == "TWD" else acc["balance"] * usd_twd
                 disp_bal = twd_bal if display_currency == "TWD" else twd_bal / usd_twd if display_currency == "USD" else (twd_bal / usd_twd) / btc_usd if btc_usd else twd_bal
-                # 🟢 修正："显示金額" 打錯字修復為 "顯示金額" 以避免 KeyError
                 cash_df_list.append({"id": acc["id"], "名稱": acc["name"], "幣別": acc["currency"], "餘額": acc["balance"], "顯示金額": disp_bal})
             
             cash_df = pd.DataFrame(cash_df_list)
@@ -1049,18 +1193,18 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                             div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
                             cash_hist.append({'Date': d_str, 'Value': c_val / div})
                             
-                    cash_hist_df = pd.DataFrame(cash_hist)
-                    if not cash_hist_df.empty:
-                        cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
-                        cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                        if cash_hist_df['Value'].sum() > 0:
-                            fig_cash_line = _build_cash_trend_fig(
-                                tuple(cash_hist_df['Date'].astype(str).tolist()),
-                                tuple(cash_hist_df['Value'].tolist()),
-                                safe_unit,
-                                st.session_state.privacy_mode
-                            )
-                            st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
+                        cash_hist_df = pd.DataFrame(cash_hist)
+                        if not cash_hist_df.empty:
+                            cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
+                            cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
+                            if cash_hist_df['Value'].sum() > 0:
+                                fig_cash_line = _build_cash_trend_fig(
+                                    tuple(cash_hist_df['Date'].astype(str).tolist()),
+                                    tuple(cash_hist_df['Value'].tolist()),
+                                    safe_unit,
+                                    st.session_state.privacy_mode
+                                )
+                                st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
                         else:
                             st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                     else:
@@ -1616,7 +1760,6 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
 
             cr, cp = st.columns([2.5, 1.5])
             with cr:
-                # 🟢 全域記憶時間區間邏輯
                 options = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
                 current_val = st.session_state.global_trend_range
                 idx = options.index(current_val) if current_val in options else 1
