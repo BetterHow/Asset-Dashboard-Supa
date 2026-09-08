@@ -365,7 +365,9 @@ def recalculate_history():
     progress_text = "抓取並壓縮歷史報價中..."
     my_bar = st.progress(0, text=progress_text)
     
-    # 🟢 修復：加入自動後綴判定，確保 yfinance 能抓到台股資料
+    # 🟢 修正：徹底拔除會導致抓取失敗的棄用參數，並確保使用安全的日期字串格式
+    start_str = (earliest_date - timedelta(days=14)).strftime('%Y-%m-%d')
+    
     for i, raw_symbol in enumerate(all_symbols):
         my_bar.progress((i + 1) / len(all_symbols), text=f"{progress_text} ({raw_symbol})")
         
@@ -380,18 +382,22 @@ def recalculate_history():
                 
         for sym in cands:
             try:
-                tk_data = yf.Ticker(sym).history(start=earliest_date - timedelta(days=7), auto_adjust=False)
-                if not tk_data.empty:
+                tk_data = yf.Ticker(sym).history(start=start_str)
+                if not tk_data.empty and 'Close' in tk_data.columns:
+                    tk_data.index = pd.to_datetime(tk_data.index)
                     if tk_data.index.tz is not None:
                         tk_data.index = tk_data.index.tz_localize(None)
                     tk_data.index = tk_data.index.normalize()
-                    old_k = tk_data[tk_data.index < cutoff].resample('W-MON').last()
+                    
+                    old_k = tk_data[tk_data.index < cutoff]
+                    if not old_k.empty:
+                        old_k = old_k.resample('W-MON').last()
                     new_k = tk_data[tk_data.index >= cutoff]
-                    comb = pd.concat([old_k, new_k])['Close'].ffill()
-                    # 必須用原始的 raw_symbol 當 key，後續查價才對得起來
+                    
+                    comb = pd.concat([old_k, new_k])['Close'].dropna().ffill()
                     price_cache[raw_symbol] = comb 
                     break 
-            except: 
+            except Exception: 
                 pass
             
     new_snaps = {}
@@ -1197,7 +1203,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
         
-        # 🟢 修正：徹底將圖表邏輯退出資料迴圈外，不再重複創建圖表造成記憶體爆炸
         if not cash_df.empty and cash_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
