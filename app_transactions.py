@@ -120,7 +120,8 @@ div[data-testid="stExpander"] details summary p { font-size: 22px !important; fo
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("margin_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
 
-for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("global_trend_range", "1個月")]:
+# 🟢 加入各區塊專屬的 trend_range 記憶預設值
+for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("global_trend_range", "1個月"), ("cash_trend_range", "1年"), ("margin_trend_range", "1年"), ("lib_trend_range", "1年")]:
     if k not in st.session_state: st.session_state[k] = def_val
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -154,7 +155,7 @@ def get_latest_price(ticker: str):
             stock = yf.Ticker(sym)
             price = stock.fast_info.get("last_price")
             if price is not None and not pd.isna(price) and price > 0: return round(float(price), 4)
-            hist = stock.history(period="1mo")
+            hist = stock.history(period="1mo", auto_adjust=False)
             if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
         except Exception: continue
     return None
@@ -169,7 +170,7 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
 
     for sym in cands:
         try:
-            hist = yf.Ticker(sym).history(start=start_date)
+            hist = yf.Ticker(sym).history(start=start_date, auto_adjust=False)
             if not hist.empty:
                 if hist.index.tz is not None:
                     hist.index = hist.index.tz_localize(None)
@@ -663,6 +664,7 @@ def render_account_history(acc, category_name):
 # ========================================================
 # ⚡ 效能優化：Plotly 圖表建構快取
 # ========================================================
+# 🟢 修正：移除強制的範圍綁定，讓 x 軸範圍能夠動態適應傳入的資料區間
 @st.cache_data(show_spinner=False)
 def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
     fig = go.Figure()
@@ -674,7 +676,7 @@ def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
     ))
     if dates:
         today_dt = pd.to_datetime(date.today())
-        start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
+        start_date = pd.to_datetime(min(dates)) - pd.Timedelta(days=1)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
@@ -706,7 +708,7 @@ def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
     ))
     if dates:
         today_dt = pd.to_datetime(date.today())
-        start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
+        start_date = pd.to_datetime(min(dates)) - pd.Timedelta(days=1)
         fig.update_layout(
             margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
@@ -1203,10 +1205,18 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             st.caption("尚無帳戶，請點選右上角新增。")
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+        
         if not cash_df.empty and cash_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 現金變化趨勢</div>", unsafe_allow_html=True)
+                
+                # 🟢 新增現金圖表專屬時間區間選擇器
+                opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
+                cur_val = st.session_state.cash_trend_range
+                tr = st.radio("時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="cash_tr", horizontal=True, label_visibility="collapsed")
+                st.session_state.cash_trend_range = tr
+
                 history_data = st.session_state.history_snapshots
                 if len(history_data) > 0:
                     cash_hist = []
@@ -1223,16 +1233,21 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                     if not cash_hist_df.empty:
                         cash_hist_df['Date'] = pd.to_datetime(cash_hist_df['Date'])
                         cash_hist_df = cash_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                        if cash_hist_df['Value'].sum() > 0:
+                        
+                        tdy = pd.to_datetime(date.today())
+                        sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else cash_hist_df['Date'].min() - pd.Timedelta(days=3)
+                        fdf = cash_hist_df[cash_hist_df['Date'] >= sd]
+                        
+                        if not fdf.empty and fdf['Value'].sum() > 0:
                             fig_cash_line = _build_cash_trend_fig(
-                                tuple(cash_hist_df['Date'].astype(str).tolist()),
-                                tuple(cash_hist_df['Value'].tolist()),
+                                tuple(fdf['Date'].astype(str).tolist()),
+                                tuple(fdf['Value'].tolist()),
                                 safe_unit,
                                 st.session_state.privacy_mode
                             )
                             st.plotly_chart(fig_cash_line, use_container_width=True, config={'scrollZoom': True})
                         else:
-                            st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+                            st.caption("該區間尚無足夠的歷史資料繪製趨勢圖。")
                     else:
                         st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                 else:
@@ -1425,6 +1440,13 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 期貨權益數變化趨勢</div>", unsafe_allow_html=True)
+                
+                # 🟢 新增期貨保證金圖表專屬時間區間選擇器
+                opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
+                cur_val = st.session_state.margin_trend_range
+                tr = st.radio("時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="margin_tr", horizontal=True, label_visibility="collapsed")
+                st.session_state.margin_trend_range = tr
+
                 history_data = st.session_state.history_snapshots
                 if len(history_data) > 0:
                     margin_hist = []
@@ -1441,17 +1463,22 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     if not margin_hist_df.empty:
                         margin_hist_df['Date'] = pd.to_datetime(margin_hist_df['Date'])
                         margin_hist_df = margin_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                        if margin_hist_df['Value'].sum() > 0:
+                        
+                        tdy = pd.to_datetime(date.today())
+                        sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else margin_hist_df['Date'].min() - pd.Timedelta(days=3)
+                        fdf = margin_hist_df[margin_hist_df['Date'] >= sd]
+
+                        if not fdf.empty and fdf['Value'].sum() > 0:
                             fig_margin_line = _build_cash_trend_fig(
-                                tuple(margin_hist_df['Date'].astype(str).tolist()),
-                                tuple(margin_hist_df['Value'].tolist()),
+                                tuple(fdf['Date'].astype(str).tolist()),
+                                tuple(fdf['Value'].tolist()),
                                 safe_unit,
                                 st.session_state.privacy_mode
                             )
                             fig_margin_line.update_traces(name='期貨權益數', line=dict(color='#AB63FA'), fillcolor='rgba(171, 99, 250, 0.1)')
                             st.plotly_chart(fig_margin_line, use_container_width=True, config={'scrollZoom': True})
                         else:
-                            st.caption("尚無足夠的歷史資料繪製趨勢圖。")
+                            st.caption("該區間尚無足夠的歷史資料繪製趨勢圖。")
                     else:
                         st.caption("尚無足夠的歷史資料繪製趨勢圖。")
                 else:
@@ -1605,6 +1632,13 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 負債變化趨勢</div>", unsafe_allow_html=True)
+                
+                # 🟢 新增負債圖表專屬時間區間選擇器
+                opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
+                cur_val = st.session_state.lib_trend_range
+                tr = st.radio("時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="lib_tr", horizontal=True, label_visibility="collapsed")
+                st.session_state.lib_trend_range = tr
+
                 history_data = st.session_state.history_snapshots
                 if len(history_data) > 0:
                     lib_hist = []
@@ -1621,13 +1655,23 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     if not lib_hist_df.empty:
                         lib_hist_df['Date'] = pd.to_datetime(lib_hist_df['Date'])
                         lib_hist_df = lib_hist_df.sort_values('Date').set_index('Date').resample('D').ffill().reset_index()
-                        fig_lib_line = _build_lib_trend_fig(
-                            tuple(lib_hist_df['Date'].astype(str).tolist()),
-                            tuple(lib_hist_df['Value'].tolist()),
-                            safe_unit,
-                            st.session_state.privacy_mode
-                        )
-                        st.plotly_chart(fig_lib_line, use_container_width=True, config={'scrollZoom': True})
+                        
+                        tdy = pd.to_datetime(date.today())
+                        sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else lib_hist_df['Date'].min() - pd.Timedelta(days=3)
+                        fdf = lib_hist_df[lib_hist_df['Date'] >= sd]
+
+                        if not fdf.empty and fdf['Value'].sum() > 0:
+                            fig_lib_line = _build_lib_trend_fig(
+                                tuple(fdf['Date'].astype(str).tolist()),
+                                tuple(fdf['Value'].tolist()),
+                                safe_unit,
+                                st.session_state.privacy_mode
+                            )
+                            st.plotly_chart(fig_lib_line, use_container_width=True, config={'scrollZoom': True})
+                        else:
+                            st.caption("該區間尚無足夠的歷史資料繪製趨勢圖。")
+                    else:
+                        st.caption("該區間尚無足夠的歷史資料繪製趨勢圖。")
             with c_chart_right:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📊 負債分佈佔比</div>", unsafe_allow_html=True)
                 if not lib_df.empty:
