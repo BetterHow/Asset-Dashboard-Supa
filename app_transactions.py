@@ -515,6 +515,132 @@ def fmt(num, decimals=2):
 
 def mask_val(val_str): return "＊＊＊＊" if st.session_state.privacy_mode else val_str
 
+# 🟢 補回核心帳戶歷史明細渲染函式，絕不再遺漏
+def format_hist_row(r, privacy):
+    sign = "+" if r['action'] in ["增加", "建立", "入金"] or "更新權益數 (+" in r['action'] else "-" if r['action'] in ["減少", "出金"] or "更新權益數 (-" in r['action'] else ""
+    raw_amt = f"{sign}{abs(r['amount']):,.2f}" if r['amount'] % 1 != 0 else f"{sign}{abs(r['amount']):,.0f}"
+    amt_str = "＊＊＊＊" if privacy else raw_amt
+    action_color = "#4ade80" if sign == "+" else "#ef4444" if sign == "-" else "#38bdf8"
+    note_str = f"<span style='color:#94a3b8; font-size:16px; margin-left:8px;'>{r.get('note', '')}</span>" if r.get('note') else ""
+    return f"<div style='margin-bottom:6px; font-size:18px;'>🗓️ <span style='color:#94a3b8; font-size:16px;'>{r['date'][:16]}</span> ｜ <span style='color:{action_color}; font-weight:600;'>{r['action']}</span> ｜ <b>{amt_str}</b>{note_str}</div>"
+
+def render_account_history(acc, category_name):
+    history_list = acc.get("history", [])
+    if not history_list:
+        st.caption("尚無異動紀錄")
+        return
+        
+    hist_sorted = sorted(history_list, key=lambda x: x['date'])
+    run_bal = 0
+    for hr in hist_sorted:
+        act = hr['action']
+        if "更新權益數" in act:
+            run_bal += hr['amount']
+        elif act == '建立' or "入金" in act or "增加" in act:
+            run_bal += abs(hr['amount'])
+        elif "出金" in act or "減少" in act:
+            run_bal -= abs(hr['amount'])
+        hr['_running_bal'] = run_bal
+
+    def render_row(r, true_idx):
+        is_editing = (st.session_state.get("edit_hist_id") == f"{category_name}_{acc['id']}_{true_idx}")
+        if is_editing:
+            hc1, hc2, hc3, hc4 = st.columns([2.8, 2.2, 3.0, 2.0])
+            new_date = hc1.text_input("日期", value=r['date'], key=f"hd_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed")
+            
+            is_target_type = ("更新權益數" in r['action'] or r['action'] == '建立')
+            if is_target_type:
+                default_val = str(r.get('_running_bal', r['amount']))
+                ph = "修改後目標金額"
+            else:
+                default_val = str(abs(r['amount']))
+                ph = "修改異動差額"
+                
+            new_amt = hc2.text_input(ph, value=default_val, key=f"ha_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed", placeholder=ph)
+            new_note = hc3.text_input("備註", value=r.get('note',''), key=f"hn_{category_name}_{acc['id']}_{true_idx}", label_visibility="collapsed", placeholder="備註")
+            
+            hb_col = hc4.columns(2)
+            if hb_col[0].button("✔️", key=f"hs_{category_name}_{acc['id']}_{true_idx}"):
+                new_a = safe_float(new_amt)
+                if new_a is not None:
+                    old_action = r['action']
+                    old_amt_val = r['amount']
+                    old_bal_impact, old_cost_impact = get_impact(old_action, old_amt_val, category_name)
+                    apply_history_patch(r['date'], category_name, acc['currency'], -old_bal_impact, -old_cost_impact)
+                    
+                    action = r['action']
+                    balance_change = 0
+                    cost_change = 0
+                    if "更新權益數" in action:
+                        old_target = r.get('_running_bal', 0)
+                        balance_change = new_a - old_target
+                        r['amount'] += balance_change
+                        sign_str = "+" if r['amount'] >= 0 else ""
+                        r['action'] = f"更新權益數 ({sign_str}{r['amount']:,.0f})"
+                    elif action == '建立':
+                        old_target = r.get('_running_bal', 0)
+                        balance_change = new_a - old_target
+                        cost_change = balance_change
+                        r['amount'] = new_a
+                    else:
+                        old_delta = abs(r['amount'])
+                        diff = new_a - old_delta
+                        if "減少" in action or "出金" in action:
+                            balance_change = -diff
+                            cost_change = -diff if "出金" in action else 0
+                        else:
+                            balance_change = diff
+                            cost_change = diff if "入金" in action else 0
+                        r['amount'] = new_a
+                    
+                    acc['balance'] += balance_change
+                    if category_name == "margin":
+                        acc['cost'] = acc.get("cost", acc["balance"]) + cost_change
+                        
+                    r['date'] = new_date
+                    r['note'] = new_note
+                    
+                    new_bal_impact, new_cost_impact = get_impact(r['action'], r['amount'], category_name)
+                    apply_history_patch(r['date'], category_name, acc['currency'], new_bal_impact, new_cost_impact)
+                    
+                    for hr in acc['history']: hr.pop('_running_bal', None)
+                    save_data(f"{category_name}_accounts", st.session_state[f"{category_name}_accounts"])
+                    st.session_state.edit_hist_id = None
+                    st.rerun()
+            if hb_col[1].button("❌", key=f"hc_{category_name}_{acc['id']}_{true_idx}"):
+                st.session_state.edit_hist_id = None
+                st.rerun()
+        else:
+            hc1, hc2, hc3 = st.columns([8.4, 0.8, 0.8])
+            hc1.markdown(format_hist_row(r, st.session_state.privacy_mode), unsafe_allow_html=True)
+            if hc2.button("✏️", key=f"he_{category_name}_{acc['id']}_{true_idx}"):
+                st.session_state.edit_hist_id = f"{category_name}_{acc['id']}_{true_idx}"
+                st.rerun()
+            if hc3.button("🗑️", key=f"hdel_{category_name}_{acc['id']}_{true_idx}"):
+                action = r['action']
+                old_amt_val = r['amount']
+                
+                old_bal_impact, old_cost_impact = get_impact(action, old_amt_val, category_name)
+                apply_history_patch(r['date'], category_name, acc['currency'], -old_bal_impact, -old_cost_impact)
+                
+                acc['balance'] -= old_bal_impact
+                if category_name == "margin":
+                    acc['cost'] = acc.get("cost", acc["balance"]) - old_cost_impact
+                    
+                acc["history"].pop(true_idx)
+                for hr in acc['history']: hr.pop('_running_bal', None)
+                save_data(f"{category_name}_accounts", st.session_state[f"{category_name}_accounts"])
+                st.rerun()
+
+    rev_hist = list(reversed(list(enumerate(history_list))))
+    for true_idx, r in rev_hist[:5]:
+        render_row(r, true_idx)
+        
+    if len(rev_hist) > 5:
+        with st.expander(f"展開其餘 {len(rev_hist)-5} 筆紀錄..."):
+            for true_idx, r in rev_hist[5:]:
+                render_row(r, true_idx)
+
 # ========================================================
 # ⚡ 效能優化：Plotly 圖表建構快取
 # ========================================================
@@ -880,6 +1006,49 @@ with st.sidebar:
                 st.success("歷史快照已清除！")
                 st.rerun()
 
+c_t, c_tg, c_r, _, c_tdc = st.columns([1.5, 1.0, 1.0, 2.5, 4.0])
+with c_t: st.markdown("<h3 style='margin: 0; padding-top: 5px; white-space: nowrap;'>資產總覽</h3>", unsafe_allow_html=True)
+with c_tg:
+    if st.button("顯示金額" if privacy else "隱藏金額", use_container_width=True):
+        st.session_state.privacy_mode = not privacy; st.rerun()
+with c_r:
+    if st.button("重新整理", use_container_width=True): st.cache_data.clear(); st.rerun()
+        
+with c_tdc:
+    hds = sorted([d for d in st.session_state.history_snapshots.keys() if d < today_s])
+    pnv = nv
+    if hds:
+        pd_data = st.session_state.history_snapshots[hds[-1]]
+        if isinstance(pd_data, dict) and pd_data.get("version") == "v2":
+            pnv = pd_data.get(display_currency, pd_data.get("TWD")).get("value", 0) - pd_data.get(display_currency, pd_data.get("TWD")).get("liability", 0)
+        else:
+            v, l = pd_data.get("value", 0) if isinstance(pd_data, dict) else pd_data, pd_data.get("liability", 0) if isinstance(pd_data, dict) else 0
+            div = 1 if display_currency == "TWD" else usd_twd if display_currency == "USD" else (btc_usd * usd_twd if btc_usd else 1)
+            pnv = (v - l) / div
+    
+    tc_val = nv - pnv
+    tc_pct_str = "∞%" if abs(pnv)<1e-5 and tc_val>0 else "0.00%" if abs(pnv)<1e-5 and tc_val<=0 else f"{(tc_val/abs(pnv)*100):.2f}%"
+    su = unit.replace('$', '&#36;')
+    if privacy: st.markdown("<div style='text-align:right; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold;'>＊＊＊＊</span></div>", unsafe_allow_html=True)
+    else:
+        color = "#4ade80" if tc_val>0 else "#ef4444" if tc_val<0 else "#94a3b8"
+        sign = "+" if tc_val>0 else ""
+        def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
+        vs = f"{sign}{su} {format_cv_val(abs(tc_val), display_currency)}"
+        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-5px;'><span style='font-size:14px; color:#94a3b8;'>當日淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{color};'>{vs} ({sign}{tc_pct_str})</span></div>", unsafe_allow_html=True)
+
+opts = ["TWD", "USD", "BTC"]
+idx = opts.index(display_currency) if display_currency in opts else 0
+nc = st.radio("顯示幣別", opts, horizontal=True, index=idx)
+if nc != display_currency: st.session_state.display_currency = nc; st.rerun()
+st.checkbox("損益含權利金/配息", key="include_premium")
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("淨資產現值", mask_val(f"{unit.replace('&#36;', '$')} {nv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {nv:,.3f}"))
+m2.metric("總資產現值", mask_val(f"{unit.replace('&#36;', '$')} {tv:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tv:,.3f}"))
+m3.metric("負債總額", mask_val(f"{unit.replace('&#36;', '$')} {tl_disp:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {tl_disp:,.3f}"))
+m4.metric("未實現損益", mask_val(f"{unit.replace('&#36;', '$')} {n_pnl:,.0f}" if display_currency!="BTC" else f"{unit.replace('&#36;', '$')} {n_pnl:,.3f}"), delta=f"{n_pnl_pct:.1f}%")
+
 def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
     with st.expander("💵 現金總覽", expanded=False):
         cash_total_display = 0
@@ -1013,7 +1182,8 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             st.caption("尚無帳戶，請點選右上角新增。")
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-        # 🟢 修正：圖表迴圈已完全移出歷史紀錄處理的 for 迴圈外
+        
+        # 🟢 已經 100% 確保圖表區塊在 `for acc in sorted_cash_accounts:` 迴圈之外！
         if not cash_df.empty and cash_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
