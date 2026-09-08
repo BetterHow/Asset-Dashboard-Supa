@@ -1046,7 +1046,7 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             st.caption("尚無帳戶，請點選右上角新增。")
 
         st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-        # 🟢 修正：圖表迴圈已完全移出歷史紀錄處理範圍之外
+        # 🟢 修正：徹底將圖表邏輯退出資料迴圈外，不再重複創建圖表造成記憶體爆炸
         if not cash_df.empty and cash_total_display > 0:
             c_chart_left, c_chart_right = st.columns([1.5, 1.0])
             with c_chart_left:
@@ -1630,6 +1630,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
 
             cr, cp = st.columns([2.5, 1.5])
             with cr:
+                # 🟢 全域記憶時間區間邏輯
                 options = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
                 current_val = st.session_state.global_trend_range
                 idx = options.index(current_val) if current_val in options else 1
