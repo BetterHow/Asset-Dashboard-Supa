@@ -120,8 +120,7 @@ div[data-testid="stExpander"] details summary p { font-size: 22px !important; fo
 for k, def_val in [("transactions", []), ("manual_prices", {}), ("cash_accounts", []), ("margin_accounts", []), ("liabilities_accounts", []), ("history_snapshots", {})]:
     if k not in st.session_state: st.session_state[k] = load_data(k, def_val)
 
-# 🟢 加入各區塊專屬的 trend_range 記憶預設值
-for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("global_trend_range", "1個月"), ("cash_trend_range", "1年"), ("margin_trend_range", "1年"), ("lib_trend_range", "1年")]:
+for k, def_val in [("selected_category", None), ("editing_id", None), ("edit_cash_id", None), ("edit_liability_id", None), ("edit_margin_id", None), ("adjust_cash_id", None), ("adjust_liability_id", None), ("adjust_margin_id", None), ("edit_hist_id", None), ("display_currency", "TWD"), ("selected_extras", []), ("visible_items", set()), ("clear_form", False), ("privacy_mode", False), ("prev_ticker", ""), ("prev_type", "台股"), ("prev_name_input", ""), ("prev_ticker_input", ""), ("global_trend_range", "1個月"), ("cash_trend_range", "1年"), ("margin_trend_range", "1年"), ("lib_trend_range", "1年"), ("ind_trend_range", "1年")]:
     if k not in st.session_state: st.session_state[k] = def_val
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -155,7 +154,7 @@ def get_latest_price(ticker: str):
             stock = yf.Ticker(sym)
             price = stock.fast_info.get("last_price")
             if price is not None and not pd.isna(price) and price > 0: return round(float(price), 4)
-            hist = stock.history(period="1mo", auto_adjust=False)
+            hist = stock.history(period="1mo")
             if not hist.empty: return round(float(hist["Close"].dropna().iloc[-1]), 4)
         except Exception: continue
     return None
@@ -170,8 +169,9 @@ def get_historical_prices_for_chart(ticker: str, start_date: pd.Timestamp):
 
     for sym in cands:
         try:
-            hist = yf.Ticker(sym).history(start=start_date, auto_adjust=False)
-            if not hist.empty:
+            hist = yf.Ticker(sym).history(start=start_date.strftime('%Y-%m-%d'))
+            if not hist.empty and 'Close' in hist.columns:
+                hist.index = pd.to_datetime(hist.index)
                 if hist.index.tz is not None:
                     hist.index = hist.index.tz_localize(None)
                 hist.index = hist.index.normalize()
@@ -365,7 +365,6 @@ def recalculate_history():
     
     progress_text = "抓取並壓縮歷史報價中..."
     my_bar = st.progress(0, text=progress_text)
-    
     start_str = (earliest_date - timedelta(days=14)).strftime('%Y-%m-%d')
     
     for i, raw_symbol in enumerate(all_symbols):
@@ -664,7 +663,6 @@ def render_account_history(acc, category_name):
 # ========================================================
 # ⚡ 效能優化：Plotly 圖表建構快取
 # ========================================================
-# 🟢 修正：移除強制的範圍綁定，讓 x 軸範圍能夠動態適應傳入的資料區間
 @st.cache_data(show_spinner=False)
 def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
     fig = go.Figure()
@@ -1211,7 +1209,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 現金變化趨勢</div>", unsafe_allow_html=True)
                 
-                # 🟢 新增現金圖表專屬時間區間選擇器
                 opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
                 cur_val = st.session_state.cash_trend_range
                 tr = st.radio("時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="cash_tr", horizontal=True, label_visibility="collapsed")
@@ -1441,7 +1438,6 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 期貨權益數變化趨勢</div>", unsafe_allow_html=True)
                 
-                # 🟢 新增期貨保證金圖表專屬時間區間選擇器
                 opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
                 cur_val = st.session_state.margin_trend_range
                 tr = st.radio("時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="margin_tr", horizontal=True, label_visibility="collapsed")
@@ -1633,7 +1629,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
             with c_chart_left:
                 st.markdown("<div style='text-align:center; color:#94a3b8; font-size:15px; margin-bottom:10px; font-weight:600;'>📉 負債變化趨勢</div>", unsafe_allow_html=True)
                 
-                # 🟢 新增負債圖表專屬時間區間選擇器
                 opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
                 cur_val = st.session_state.lib_trend_range
                 tr = st.radio("時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="lib_tr", horizontal=True, label_visibility="collapsed")
@@ -1858,7 +1853,7 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                         sgn = "+" if cv>0 else ""
                         def format_cv_val(val, dc): return f"{val:,.0f}" if dc != "BTC" else f"{val:,.4f}"
                         vs = f"{sgn}{unit.replace('$', '&#36;')} {format_cv_val(abs(cv), display_currency)}"
-                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sgn}{cp_str})</span></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='text-align:right; line-height:1.2; margin-top:-10px;'><span style='font-size:16px; color:#94a3b8;'>區間淨值變化</span><br><span style='font-size:30px; font-weight:bold; color:{c_clr};'>{vs} ({sign}{cp_str})</span></div>", unsafe_allow_html=True)
             
             if not fdf.empty:
                 fdf['PnL'] = fdf['Value'] - fdf['Cost']
@@ -2012,9 +2007,19 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
         tdf = pd.DataFrame(transactions)
         tdf["date_obj"] = pd.to_datetime(tdf["date"])
         tdf["target_label"] = tdf.apply(lambda r: f"{r['name']} ({r['ticker']})" if r['ticker'] else r['name'], axis=1)
-        sel_t = st.selectbox("選擇標的", sorted(tdf["target_label"].unique()), index=None, placeholder="🔍 搜尋...", label_visibility="collapsed")
+        
+        sel_c1, sel_c2 = st.columns([2.5, 3.5])
+        with sel_c1:
+            sel_t = st.selectbox("選擇標的", sorted(tdf["target_label"].unique()), index=None, placeholder="🔍 搜尋標的...", label_visibility="collapsed")
         
         if sel_t:
+            with sel_c2:
+                # 🟢 新增個別分析專屬時間區間選擇器
+                opts = ["1週", "1個月", "3個月", "半年", "1年", "全部"]
+                cur_val = st.session_state.ind_trend_range
+                tr = st.radio("個別分析時間區間", opts, index=opts.index(cur_val) if cur_val in opts else 4, key="ind_tr", horizontal=True, label_visibility="collapsed")
+                st.session_state.ind_trend_range = tr
+
             inc_prem = st.checkbox("圖表計算包含權利金/配息降本", value=st.session_state.get("include_premium", False))
             with st.spinner("載入歷史資料中..."):
                 atx = tdf[tdf["target_label"] == sel_t].sort_values("date_obj").copy()
@@ -2028,6 +2033,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 cs, cac = 0.0, 0.0
                 d_recs = []
                 
+                # 依然從歷史第一天演練會計，確保均價與持股 100% 正確
                 for d, dt in atx.groupby("date_obj"):
                     for _, tx in dt.iterrows():
                         q, p, a = float(tx["quantity"]), float(tx["price"]), tx["type"]
@@ -2066,6 +2072,15 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     ddf["Close"], ddf["Value"] = None, ddf["cost"]
                 
+                # 🟢 根據選擇的區間動態裁切顯示範圍
+                tdy = pd.to_datetime(date.today())
+                sd = tdy - pd.DateOffset(weeks=1) if tr == "1週" else tdy - pd.DateOffset(months=1) if tr == "1個月" else tdy - pd.DateOffset(months=3) if tr == "3個月" else tdy - pd.DateOffset(months=6) if tr == "半年" else tdy - pd.DateOffset(years=1) if tr == "1年" else ddf.index.min()
+                
+                ddf = ddf[ddf.index >= sd].copy()
+                if not hdf.empty:
+                    hdf = hdf[hdf.index >= sd].copy()
+                atx_filtered = atx[atx["date_obj"] >= sd].copy()
+
                 ddf['pnl'] = ddf['Value'] - ddf['cost']
                 currency_symbols = {"TWD": "NT&#36;", "USD": "US&#36;", "BTC": "BTC"}
                 asset_unit_str = currency_symbols.get(asset_currency, asset_currency)
@@ -2090,8 +2105,8 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 ddf['Value_Gain'] = ddf[['Value', 'cost']].max(axis=1)
                 ddf['Value_Loss'] = ddf[['Value', 'cost']].min(axis=1)
                 
-                y_max_ind = ddf[['Value', 'cost']].max().max()
-                y_min_ind = ddf[['Value', 'cost']].min().min()
+                y_max_ind = ddf[['Value', 'cost']].max().max() if not ddf.empty else 1.0
+                y_min_ind = ddf[['Value', 'cost']].min().min() if not ddf.empty else 0.0
                 y_range_ind = y_max_ind - y_min_ind
                 if y_range_ind == 0: y_range_ind = 1
                 
@@ -2127,7 +2142,9 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
-                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
+                    start_x = ddf.index.min() - pd.Timedelta(days=1) if not ddf.empty else None
+                    end_x = tdy + pd.Timedelta(days=1)
+                    fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_x, end_x] if start_x else None, showgrid=False, type="date"), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
                     st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
                 with c2:
@@ -2137,9 +2154,9 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                         fig2.add_trace(go.Scatter(x=hdf.index, y=hdf['Close'], mode='lines', name='收盤價', line=dict(color='#94a3b8', width=2)))
                         fig2.add_trace(go.Scatter(x=ddf.index, y=ddf['avg_cost'].abs(), mode='lines', name='平均成本', line=dict(color='#FFA15A', width=2, dash='dash')))
                         
-                        buys = atx[atx['type'] == '買進'].copy()
-                        sells = atx[atx['type'] == '賣出'].copy()
-                        max_q = atx[atx['type'].isin(['買進', '賣出'])]['quantity'].max()
+                        buys = atx_filtered[atx_filtered['type'] == '買進'].copy()
+                        sells = atx_filtered[atx_filtered['type'] == '賣出'].copy()
+                        max_q = atx_filtered[atx_filtered['type'].isin(['買進', '賣出'])]['quantity'].max() if not atx_filtered.empty else 1
                         if pd.isna(max_q) or max_q <= 0: max_q = 1
                         
                         def mk_hover(r): return "＊＊＊＊" if privacy else f"日期: {r['date']}<br>動作: {r['type']}<br>價格: {r['price']}<br>數量: {r['quantity']}<br>備註: {r.get('note', '')}"
@@ -2159,25 +2176,25 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['price'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        divs = atx[atx['type'] == '配息'].copy()
+                        divs = atx_filtered[atx_filtered['type'] == '配息'].copy()
                         if not divs.empty:
                             divs['hover'] = divs.apply(mk_hover, axis=1)
                             divs['y_pos'] = divs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=divs['date_obj'], y=divs['y_pos'], mode='markers', name='配息', marker=dict(color='#f59e0b', size=12, symbol='star', line=dict(width=1, color='white')), customdata=divs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        sps = atx[atx['type'] == 'Sell Put'].copy()
+                        sps = atx_filtered[atx_filtered['type'] == 'Sell Put'].copy()
                         if not sps.empty:
                             sps['hover'] = sps.apply(mk_hover, axis=1)
                             sps['y_pos'] = sps.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=sps['date_obj'], y=sps['y_pos'], mode='markers', name='Sell Put', marker=dict(color='#8b5cf6', size=12, symbol='triangle-up', line=dict(width=1, color='white')), customdata=sps['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        ccs = atx[atx['type'] == 'Covered Call'].copy()
+                        ccs = atx_filtered[atx_filtered['type'] == 'Covered Call'].copy()
                         if not ccs.empty:
                             ccs['hover'] = ccs.apply(mk_hover, axis=1)
                             ccs['y_pos'] = ccs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=ccs['date_obj'], y=ccs['y_pos'], mode='markers', name='Covered Call', marker=dict(color='#ec4899', size=12, symbol='triangle-down', line=dict(width=1, color='white')), customdata=ccs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
+                        fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[start_x, end_x] if start_x else None, showgrid=False, type="date"), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
 render_individual_analysis(st.session_state.transactions, privacy, display_currency, usd_twd, btc_usd)
