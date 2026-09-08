@@ -365,7 +365,6 @@ def recalculate_history():
     progress_text = "抓取並壓縮歷史報價中..."
     my_bar = st.progress(0, text=progress_text)
     
-    # 🟢 修正：徹底拔除會導致抓取失敗的棄用參數，並確保使用安全的日期字串格式
     start_str = (earliest_date - timedelta(days=14)).strftime('%Y-%m-%d')
     
     for i, raw_symbol in enumerate(all_symbols):
@@ -660,141 +659,6 @@ def render_account_history(acc, category_name):
         with st.expander(f"展開其餘 {len(rev_hist)-5} 筆紀錄..."):
             for true_idx, r in rev_hist[5:]:
                 render_row(r, true_idx)
-
-# ========================================================
-# ⚡ 效能優化：Plotly 圖表建構快取
-# ========================================================
-@st.cache_data(show_spinner=False)
-def _build_cash_trend_fig(dates, values, unit_str, privacy: bool):
-    fig = go.Figure()
-    hover_temp = "%{x|%Y-%m-%d}<br>" + unit_str + " %{y:,.0f}<extra></extra>" if not privacy else "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
-    fig.add_trace(go.Scatter(
-        x=dates, y=values, mode='lines', name='現金總額',
-        line=dict(color='#00CC96', width=3, shape='linear'),
-        fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.1)', hovertemplate=hover_temp
-    ))
-    if dates:
-        today_dt = pd.to_datetime(date.today())
-        start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
-        fig.update_layout(
-            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
-            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-            hovermode="x unified", dragmode="pan"
-        )
-    return fig
-
-@st.cache_data(show_spinner=False)
-def _build_pie_fig(labels, values, colors, unit_str, privacy: bool, height=300):
-    hover = "%{label}<br>%{percent}<br>" + unit_str + " %{value:,.0f}<extra></extra>" if not privacy else "%{label}<br>%{percent}<extra></extra>"
-    fig = go.Figure(data=[go.Pie(
-        labels=labels, values=values, pull=[0.03]*len(labels),
-        textinfo="label+percent", textfont=dict(size=14, color="#ffffff"),
-        marker=dict(colors=colors, line=dict(color="#111111", width=1.5)),
-        sort=False, hovertemplate=hover
-    )])
-    fig.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=height, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    return fig
-
-@st.cache_data(show_spinner=False)
-def _build_lib_trend_fig(dates, values, unit_str, privacy: bool):
-    fig = go.Figure()
-    hover_temp = "%{x|%Y-%m-%d}<br>" + unit_str + " %{y:,.0f}<extra></extra>" if not privacy else "%{x|%Y-%m-%d}<br>＊＊＊＊<extra></extra>"
-    fig.add_trace(go.Scatter(
-        x=dates, y=values, mode='lines', name='負債總額',
-        line=dict(color='#EF553B', width=3, shape='linear'),
-        fill='tozeroy', fillcolor='rgba(239, 85, 59, 0.1)', hovertemplate=hover_temp
-    ))
-    if dates:
-        today_dt = pd.to_datetime(date.today())
-        start_date = today_dt - pd.DateOffset(months=1) if len(dates) <= 30 else pd.to_datetime(min(dates)) - pd.Timedelta(days=3)
-        fig.update_layout(
-            margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(range=[start_date, today_dt + pd.Timedelta(days=1)], showgrid=False, tickfont=dict(color="#e2e8f0"), tickformat="%Y-%m-%d", type="date"),
-            yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy),
-            hovermode="x unified", dragmode="pan"
-        )
-    return fig
-
-@st.cache_data(show_spinner=False)
-def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts, unit_str, privacy: bool, val_name: str):
-    fdf_dates = pd.to_datetime(dates)
-    fdf_value, fdf_cost = list(values), list(costs)
-    value_gain = [max(v, c) for v, c in zip(fdf_value, fdf_cost)]
-    value_loss = [min(v, c) for v, c in zip(fdf_value, fdf_cost)]
-    y_max, y_min = max(max(fdf_value or [0]), max(fdf_cost or [0])), min(min(fdf_value or [0]), min(fdf_cost or [0]))
-    y_range = y_max - y_min if y_max != y_min else 1.0
-    pnl_y = [min(v, c) - (y_range * 0.005) for v, c in zip(fdf_value, fdf_cost)]
-    pct_y = [min(v, c) - (y_range * 0.010) for v, c in zip(fdf_value, fdf_cost)]
-
-    fig = go.Figure()
-    if privacy:
-        hover_temp_val = "＊＊＊＊<extra>" + val_name + "</extra>"
-        hover_temp_cost = "＊＊＊＊<extra>成本</extra>"
-        hover_temp_pnl = "＊＊＊＊<extra>損益</extra>"
-        hover_temp_pct = "＊＊＊＊<extra>$$ %</extra>"
-    else:
-        hover_temp_val = " : " + unit_str + " %{y:,.0f}<extra>" + val_name + "</extra>"
-        hover_temp_cost = " : " + unit_str + " %{y:,.0f}<extra>成本</extra>"
-        hover_temp_pnl = " : %{customdata}<extra>損益</extra>"
-        hover_temp_pct = " : %{customdata}<extra>$$ %</extra>"
-
-    fig.add_trace(go.Scatter(x=fdf_dates, y=pct_y, mode='lines', name='百分比', line=dict(color='rgba(0,0,0,0)', width=0), customdata=pnl_pct_texts if not privacy else None, hovertemplate=hover_temp_pct, showlegend=False, connectgaps=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=pnl_y, mode='lines', name='損益', line=dict(color='rgba(0,0,0,0)', width=0), customdata=pnl_val_texts if not privacy else None, hovertemplate=hover_temp_pnl, showlegend=False, connectgaps=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', name='成本', line=dict(color='#3b82f6', width=3), hovertemplate=hover_temp_cost))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_value, mode='lines', name=val_name, line=dict(color='#00CC96', width=3), hovertemplate=hover_temp_val))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=value_gain, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 193, 7, 0.2)', hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=fdf_cost, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=fdf_dates, y=value_loss, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
-    
-    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, tickformat="%Y-%m-%d", type="date"), yaxis=dict(showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
-    return fig
-
-@st.cache_data(show_spinner=False)
-def _build_holdings_bar_fig(labels, values_display, bar_text_labels, bar_pie_colors, privacy: bool, bar_font_size: int):
-    fig = go.Figure(data=[go.Bar(
-        x=labels, y=values_display, text=bar_text_labels, textposition="outside",
-        textfont=dict(size=bar_font_size, color="#e2e8f0"), marker_color=bar_pie_colors,
-        hovertemplate="%{x}<br>%{text}<extra></extra>" if privacy else "%{x}<br>%{text}<br>%{y:,.2f}<extra></extra>"
-    )])
-    fig.update_layout(
-        margin=dict(t=40, b=40, l=40, r=40), height=650, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(showgrid=False, tickfont=dict(size=16, color="#e2e8f0")), yaxis=dict(showgrid=True, gridcolor="#333333", tickfont=dict(color="#e2e8f0"), zeroline=False, showticklabels=not privacy)
-    )
-    return fig
-
-@st.cache_data(show_spinner=False)
-def _build_holdings_pie_fig(labels, values_abs, pie_text_labels, bar_pie_colors, privacy: bool):
-    fig = go.Figure(data=[go.Pie(
-        labels=labels, values=values_abs, pull=[0.03]*len(labels), text=pie_text_labels, textinfo="text", textposition="auto",
-        insidetextfont=dict(size=22, color="#ffffff"), outsidetextfont=dict(size=16, color="#e2e8f0"),
-        hovertemplate="%{label}<br>%{percent}<extra></extra>" if privacy else "%{label}<br>%{percent}<br>%{value:,.2f}<extra></extra>",
-        marker=dict(colors=bar_pie_colors, line=dict(color="#111111", width=1.5)), sort=False, direction="clockwise"
-    )])
-    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=750, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    fig.update_traces(domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]))
-    return fig
-
-@st.cache_data(show_spinner=False)
-def _prepare_trend_hist_data(history_json: str, selected_cat, display_currency: str):
-    try: history_snapshots = json.loads(history_json)
-    except: return []
-    hist_d = []
-    for d_str, v in history_snapshots.items():
-        if isinstance(v, dict) and v.get("version") == "v2":
-            d_data = v.get(display_currency, v.get("TWD"))
-            val, cost, liab = d_data.get("value", 0), d_data.get("cost", 0), d_data.get("liability", 0.0)
-            if selected_cat is None: vc, cc = val - liab, cost - liab
-            else:
-                cat_data = d_data.get("categories", {}).get(selected_cat, {})
-                vc, cc = cat_data.get("value", 0), cat_data.get("cost", 0)
-            hist_d.append({'Date': d_str, 'Value': vc, 'Cost': cc})
-        else:
-            val = v.get("value", 0) if isinstance(v, dict) else 0
-            liab = v.get("liability", 0) if isinstance(v, dict) else 0
-            hist_d.append({'Date': d_str, 'Value': val - liab, 'Cost': 0})
-    return hist_d
 
 # ========================================================
 # 🚀 核心資料與數值預先計算區 (⚡極速向量化優化)
@@ -1097,23 +961,26 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                     new_cash_name = st.text_input("帳戶名稱 (如: 富邦交割戶)")
                     new_cash_curr = st.selectbox("幣別", ["TWD", "USD"], key="cash_curr_box")
                     new_cash_bal = st.text_input("目前餘額")
+                    # 🟢 新增帳戶初始日期選擇，避免歷史斷層
+                    new_cash_date = st.date_input("初始建立日期", value=date.today())
                     if st.form_submit_button("確認新增", use_container_width=True):
                         if new_cash_name and safe_float(new_cash_bal) is not None:
                             amt = safe_float(new_cash_bal)
+                            date_str = new_cash_date.strftime("%Y-%m-%d %H:%M:%S")
                             new_acc = {
                                 "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
                                 "name": new_cash_name.strip(), 
                                 "currency": new_cash_curr, 
                                 "balance": amt,
                                 "history": [{
-                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "date": date_str,
                                     "action": "建立",
                                     "amount": amt,
                                     "note": "初始餘額"
                                 }]
                             }
                             st.session_state.cash_accounts.append(new_acc)
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", new_cash_curr, amt, amt)
+                            apply_history_patch(date_str, "cash", new_cash_curr, amt, amt)
                             save_data("cash_accounts", st.session_state.cash_accounts)
                             st.success("已成功新增現金帳戶！")
                             st.rerun()
@@ -1289,9 +1156,12 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     new_margin_name = st.text_input("帳戶名稱 (如: 統一期貨保證金)")
                     new_margin_curr = st.selectbox("幣別", ["TWD", "USD"], key="margin_curr_box")
                     new_margin_bal = st.text_input("目前權益數 (初始金額)")
+                    # 🟢 新增帳戶初始日期選擇，避免歷史斷層
+                    new_margin_date = st.date_input("初始建立日期", value=date.today())
                     if st.form_submit_button("確認新增", use_container_width=True):
                         if new_margin_name and safe_float(new_margin_bal) is not None:
                             amt = safe_float(new_margin_bal)
+                            date_str = new_margin_date.strftime("%Y-%m-%d %H:%M:%S")
                             new_acc = {
                                 "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
                                 "name": new_margin_name.strip(), 
@@ -1299,14 +1169,14 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                                 "balance": amt,
                                 "cost": amt,
                                 "history": [{
-                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "date": date_str,
                                     "action": "建立",
                                     "amount": amt,
                                     "note": "初始入金"
                                 }]
                             }
                             st.session_state.margin_accounts.append(new_acc)
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", new_margin_curr, amt, amt)
+                            apply_history_patch(date_str, "margin", new_margin_curr, amt, amt)
                             save_data("margin_accounts", st.session_state.margin_accounts)
                             st.success("已成功新增期貨保證金帳戶！")
                             st.rerun()
@@ -1492,23 +1362,26 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     new_lib_name = st.text_input("負債名稱 (如: 股票質借 / 房貸)")
                     new_lib_curr = st.selectbox("幣別", ["TWD", "USD"], key="lib_curr_box")
                     new_lib_bal = st.text_input("目前金額")
+                    # 🟢 新增帳戶初始日期選擇，避免歷史斷層
+                    new_lib_date = st.date_input("初始建立日期", value=date.today())
                     if st.form_submit_button("確認新增", use_container_width=True):
                         if new_lib_name and safe_float(new_lib_bal) is not None:
                             amt = safe_float(new_lib_bal)
+                            date_str = new_lib_date.strftime("%Y-%m-%d %H:%M:%S")
                             new_acc = {
                                 "id": datetime.now().strftime("%Y%m%d%H%M%S%f"), 
                                 "name": new_lib_name.strip(), 
                                 "currency": new_lib_curr, 
                                 "balance": amt,
                                 "history": [{
-                                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "date": date_str,
                                     "action": "建立",
                                     "amount": amt,
                                     "note": "初始餘額"
                                 }]
                             }
                             st.session_state.liabilities_accounts.append(new_acc)
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", new_lib_curr, amt, 0)
+                            apply_history_patch(date_str, "liabilities", new_lib_curr, amt, 0)
                             save_data("liabilities_accounts", st.session_state.liabilities_accounts)
                             st.success("已成功新增負債！")
                             st.rerun()
