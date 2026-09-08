@@ -469,7 +469,9 @@ def recalculate_history():
                 tot_cost += cost * rate
             return tot_val, tot_cost
 
-        cash_v, cash_c = get_acc_bals(st.session_state.cash_accounts)
+        cash_v, _ = get_acc_bals(st.session_state.cash_accounts)
+        cash_c = cash_v  # 🟢 修正：現金沒有損益概念，強制設定歷史成本等於現值
+        
         margin_v, margin_c = get_acc_bals(st.session_state.margin_accounts)
         liab_v, _ = get_acc_bals(st.session_state.liabilities_accounts)
         
@@ -479,7 +481,7 @@ def recalculate_history():
         if "現金" not in cats: cats["現金"] = {"value": 0.0, "cost": 0.0}
         cats["現金"]["value"] += cash_v
         cats["現金"]["cost"] += cash_c
-        
+
         if "期貨" not in cats: cats["期貨"] = {"value": 0.0, "cost": 0.0}
         cats["期貨"]["value"] += margin_v
         cats["期貨"]["cost"] += margin_c
@@ -664,7 +666,6 @@ def render_account_history(acc, category_name):
 # ========================================================
 # ⚡ 效能優化：Plotly 圖表建構快取
 # ========================================================
-# 🟢 視角窗架構：接受完整的 dates 與 values 供背景載入，但透過 view_start 與 view_end 鎖定預設顯示範圍
 @st.cache_data(show_spinner=False)
 def _build_dynamic_trend_fig(dates, values, unit_str, privacy: bool, line_color, fill_color, name, view_start, view_end, view_ymin, view_ymax):
     fig = go.Figure()
@@ -702,7 +703,6 @@ def _build_pie_fig(labels, values, colors, unit_str, privacy: bool, height=300):
     fig.update_layout(margin=dict(t=10, b=50, l=10, r=10), height=height, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     return fig
 
-# 🟢 視角窗架構：接收完整的 dates，透過 view_start 與 view_end 控制預設 viewport
 @st.cache_data(show_spinner=False)
 def _build_overall_trend_fig(dates, values, costs, pnl_val_texts, pnl_pct_texts, unit_str, privacy: bool, val_name: str, view_start, view_end, view_ymin, view_ymax):
     fdf_dates = pd.to_datetime(dates)
@@ -1234,7 +1234,6 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                         fdf = cash_hist_df[(cash_hist_df['Date'] >= sd) & (cash_hist_df['Date'] <= end_x)]
                         
                         if not fdf.empty and fdf['Value'].sum() > 0:
-                            # 🟢 智能 Y 軸：根據被選擇的時間視窗，計算最完美的 Y 軸縮放比例
                             c_min, c_max = fdf['Value'].min(), fdf['Value'].max()
                             c_pad = (c_max - c_min) * 0.1
                             if c_pad == 0: c_pad = c_max * 0.05 if c_max != 0 else 100
@@ -1475,7 +1474,6 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                         fdf = margin_hist_df[(margin_hist_df['Date'] >= sd) & (margin_hist_df['Date'] <= end_x)]
 
                         if not fdf.empty and fdf['Value'].sum() > 0:
-                            # 🟢 智能 Y 軸：根據被選擇的時間視窗，計算最完美的 Y 軸縮放比例
                             c_min, c_max = fdf['Value'].min(), fdf['Value'].max()
                             c_pad = (c_max - c_min) * 0.1
                             if c_pad == 0: c_pad = c_max * 0.05 if c_max != 0 else 100
@@ -1677,7 +1675,6 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                         fdf = lib_hist_df[(lib_hist_df['Date'] >= sd) & (lib_hist_df['Date'] <= end_x)]
 
                         if not fdf.empty and fdf['Value'].sum() > 0:
-                            # 🟢 智能 Y 軸：根據被選擇的時間視窗，計算最完美的 Y 軸縮放比例
                             c_min, c_max = fdf['Value'].min(), fdf['Value'].max()
                             c_pad = (c_max - c_min) * 0.1
                             if c_pad == 0: c_pad = c_max * 0.05 if c_max != 0 else 100
@@ -1915,7 +1912,6 @@ def render_overall_trend_section(history_snapshots, selected_cat, display_curren
                 full_df['pnl_val_text'] = full_df['PnL'].apply(get_val_text_global)
                 full_df['pnl_pct_text'] = full_df.apply(get_pct_text_global, axis=1)
 
-                # 🟢 智能 Y 軸：根據選定的時間切片計算最適當的縮放範圍
                 if not fdf_metric.empty:
                     view_ymin = fdf_metric[['Value', 'Cost']].min().min()
                     view_ymax = fdf_metric[['Value', 'Cost']].max().max()
@@ -2134,7 +2130,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     atx_filtered = atx.copy()
 
-                # 🟢 智能 Y 軸：計算圖表一 (現值與成本) 局部的 y_min 與 y_max
                 visible_ddf = ddf[(ddf.index >= sd) & (ddf.index <= end_x)]
                 if not visible_ddf.empty:
                     y_max1 = visible_ddf[['Value', 'cost']].max().max()
@@ -2145,7 +2140,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     range_y1 = None
 
-                # 🟢 智能 Y 軸：計算圖表二 (價格走勢) 局部的 y_min 與 y_max
                 y_vals2 = []
                 if not hdf.empty: 
                     vis_hdf = hdf[(hdf.index >= sd) & (hdf.index <= end_x)]
@@ -2190,13 +2184,8 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 ddf['Value_Gain'] = ddf[['Value', 'cost']].max(axis=1)
                 ddf['Value_Loss'] = ddf[['Value', 'cost']].min(axis=1)
                 
-                y_max_ind = ddf[['Value', 'cost']].max().max() if not ddf.empty else 1.0
-                y_min_ind = ddf[['Value', 'cost']].min().min() if not ddf.empty else 0.0
-                y_range_ind = y_max_ind - y_min_ind
-                if y_range_ind == 0: y_range_ind = 1
-                
-                ddf['pnl_y'] = ddf[['Value', 'cost']].min(axis=1) - (y_range_ind * 0.005)
-                ddf['pct_y'] = ddf[['Value', 'cost']].min(axis=1) - (y_range_ind * 0.010)
+                ddf['pnl_y'] = ddf[['Value', 'cost']].min(axis=1) - (1.0 * 0.005)
+                ddf['pct_y'] = ddf[['Value', 'cost']].min(axis=1) - (1.0 * 0.010)
 
                 st.markdown(f"*(註: 圖表以標的原始計價幣別呈現)*")
                 c1, c2 = st.columns(2)
@@ -2227,7 +2216,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['cost'], mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
                     fig1.add_trace(go.Scatter(x=ddf.index, y=ddf['Value_Loss'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(239, 68, 68, 0.2)', hoverinfo='skip', showlegend=False))
                     
-                    # 🟢 應用 Y 軸動態範圍與 X 軸預設視角
                     fig1.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[sd, end_x], showgrid=False, type="date"), yaxis=dict(range=range_y1, showgrid=True, showticklabels=not privacy), hovermode="x unified", dragmode="pan")
                     st.plotly_chart(fig1, use_container_width=True, config={'scrollZoom': True})
                 
@@ -2283,7 +2271,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                             ccs['y_pos'] = ccs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
                             fig2.add_trace(go.Scatter(x=ccs['date_obj'], y=ccs['y_pos'], mode='markers', name='Covered Call', marker=dict(color='#ec4899', size=12, symbol='triangle-down', line=dict(width=1, color='white')), customdata=ccs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
-                        # 🟢 應用 Y 軸動態範圍與 X 軸預設視角
                         fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[sd, end_x], showgrid=False, type="date"), yaxis=dict(range=range_y2, showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
                         st.plotly_chart(fig2, use_container_width=True, config={'scrollZoom': True})
 
