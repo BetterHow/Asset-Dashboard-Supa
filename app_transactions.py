@@ -470,7 +470,7 @@ def recalculate_history():
             return tot_val, tot_cost
 
         cash_v, _ = get_acc_bals(st.session_state.cash_accounts)
-        cash_c = cash_v  # 🟢 修正：現金沒有損益概念，強制設定歷史成本等於現值
+        cash_c = cash_v
         
         margin_v, margin_c = get_acc_bals(st.session_state.margin_accounts)
         liab_v, _ = get_acc_bals(st.session_state.liabilities_accounts)
@@ -481,7 +481,7 @@ def recalculate_history():
         if "現金" not in cats: cats["現金"] = {"value": 0.0, "cost": 0.0}
         cats["現金"]["value"] += cash_v
         cats["現金"]["cost"] += cash_c
-
+        
         if "期貨" not in cats: cats["期貨"] = {"value": 0.0, "cost": 0.0}
         cats["期貨"]["value"] += margin_v
         cats["期貨"]["cost"] += margin_c
@@ -2140,6 +2140,7 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     range_y1 = None
 
+                # 🟢 智能 Y 軸：計算圖表二 (價格走勢) 局部的 y_min 與 y_max
                 y_vals2 = []
                 if not hdf.empty: 
                     vis_hdf = hdf[(hdf.index >= sd) & (hdf.index <= end_x)]
@@ -2149,7 +2150,9 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     y_vals2.extend(vis_ddf['avg_cost'].dropna().tolist())
                 if not atx_filtered.empty:
                     vis_atx = atx_filtered[(atx_filtered['date_obj'] >= sd) & (atx_filtered['date_obj'] <= end_x)]
-                    y_vals2.extend(vis_atx['price'].dropna().tolist())
+                    # 🟢 修正：排除配息/權利金的總價去干擾 Y 軸範圍
+                    valid_prices = vis_atx[~vis_atx['type'].isin(["配息", "Sell Put", "Covered Call"])]
+                    y_vals2.extend(valid_prices['price'].dropna().tolist())
 
                 if y_vals2:
                     y_max2 = max(y_vals2)
@@ -2233,42 +2236,45 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                         
                         def mk_hover(r): return "＊＊＊＊" if privacy else f"日期: {r['date']}<br>動作: {r['type']}<br>價格: {r['price']}<br>數量: {r['quantity']}<br>備註: {r.get('note', '')}"
                         
-                        def get_y_pos(d, p):
-                            if p == 0 or pd.isna(p):
+                        # 🟢 零元防呆與配息吸附機制：確保配息/權利金的圖標吸附在當日收盤價或均價上
+                        def get_y_pos(d, p, act):
+                            if p == 0 or pd.isna(p) or act in ["配息", "Sell Put", "Covered Call"]:
                                 try:
                                     if d in hdf.index and pd.notna(hdf.loc[d, 'Close']):
                                         return float(hdf.loc[d, 'Close'])
+                                    elif d in ddf.index and pd.notna(ddf.loc[d, 'avg_cost']):
+                                        return float(ddf.loc[d, 'avg_cost'])
                                 except: pass
                             return p
 
                         if not buys.empty:
                             buys['hover'] = buys.apply(mk_hover, axis=1)
-                            buys['y_pos'] = buys.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
+                            buys['y_pos'] = buys.apply(lambda r: get_y_pos(r['date_obj'], r['price'], r['type']), axis=1)
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in buys['quantity']]
                             fig2.add_trace(go.Scatter(x=buys['date_obj'], y=buys['y_pos'], mode='markers', name='買進', marker=dict(color='#4ade80', size=sizes, line=dict(width=1, color='white')), customdata=buys['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
                             
                         if not sells.empty:
                             sells['hover'] = sells.apply(mk_hover, axis=1)
-                            sells['y_pos'] = sells.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
+                            sells['y_pos'] = sells.apply(lambda r: get_y_pos(r['date_obj'], r['price'], r['type']), axis=1)
                             sizes = [max(8, min(25, (q / max_q) * 25)) for q in sells['quantity']]
                             fig2.add_trace(go.Scatter(x=sells['date_obj'], y=sells['y_pos'], mode='markers', name='賣出', marker=dict(color='#ef4444', size=sizes, line=dict(width=1, color='white')), customdata=sells['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
                         divs = atx_filtered[atx_filtered['type'] == '配息'].copy()
                         if not divs.empty:
                             divs['hover'] = divs.apply(mk_hover, axis=1)
-                            divs['y_pos'] = divs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
+                            divs['y_pos'] = divs.apply(lambda r: get_y_pos(r['date_obj'], r['price'], r['type']), axis=1)
                             fig2.add_trace(go.Scatter(x=divs['date_obj'], y=divs['y_pos'], mode='markers', name='配息', marker=dict(color='#f59e0b', size=12, symbol='star', line=dict(width=1, color='white')), customdata=divs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
                         sps = atx_filtered[atx_filtered['type'] == 'Sell Put'].copy()
                         if not sps.empty:
                             sps['hover'] = sps.apply(mk_hover, axis=1)
-                            sps['y_pos'] = sps.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
+                            sps['y_pos'] = sps.apply(lambda r: get_y_pos(r['date_obj'], r['price'], r['type']), axis=1)
                             fig2.add_trace(go.Scatter(x=sps['date_obj'], y=sps['y_pos'], mode='markers', name='Sell Put', marker=dict(color='#8b5cf6', size=12, symbol='triangle-up', line=dict(width=1, color='white')), customdata=sps['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
                         ccs = atx_filtered[atx_filtered['type'] == 'Covered Call'].copy()
                         if not ccs.empty:
                             ccs['hover'] = ccs.apply(mk_hover, axis=1)
-                            ccs['y_pos'] = ccs.apply(lambda r: get_y_pos(r['date_obj'], r['price']), axis=1)
+                            ccs['y_pos'] = ccs.apply(lambda r: get_y_pos(r['date_obj'], r['price'], r['type']), axis=1)
                             fig2.add_trace(go.Scatter(x=ccs['date_obj'], y=ccs['y_pos'], mode='markers', name='Covered Call', marker=dict(color='#ec4899', size=12, symbol='triangle-down', line=dict(width=1, color='white')), customdata=ccs['hover'], hovertemplate="<br>%{customdata}<extra></extra>"))
 
                         fig2.update_layout(margin=dict(t=10, b=20, l=10, r=10), height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(range=[sd, end_x], showgrid=False, type="date"), yaxis=dict(range=range_y2, showgrid=True, showticklabels=not privacy), hovermode="closest", dragmode="pan")
