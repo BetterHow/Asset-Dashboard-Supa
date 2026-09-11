@@ -1123,7 +1123,32 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                 if "history" not in acc:
                     acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "建立", "amount": acc["balance"], "note": "系統升級預設"}]
 
+                c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
+                bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
+                
+                with c_main:
+                    with st.expander(f"🏦 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
+                        render_account_history(acc, "cash")
+
+                with c_adj:
+                    if st.button("調整", key=f"adj_c_{acc['id']}", use_container_width=True):
+                        st.session_state.adjust_cash_id = acc["id"] if st.session_state.get("adjust_cash_id") != acc["id"] else None
+                        st.session_state.edit_cash_id = None
+                        st.rerun()
+                with c_edit:
+                    if st.button("編輯", key=f"edit_c_{acc['id']}", use_container_width=True):
+                        st.session_state.edit_cash_id = acc["id"] if st.session_state.get("edit_cash_id") != acc["id"] else None
+                        st.session_state.adjust_cash_id = None
+                        st.rerun()
+                with c_del:
+                    if st.button("刪除", key=f"del_c_{acc['id']}", use_container_width=True):
+                        apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", acc["currency"], -acc["balance"], -acc["balance"])
+                        st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
+                        save_data("cash_accounts", st.session_state.cash_accounts)
+                        st.rerun()
+
                 if st.session_state.edit_cash_id == acc["id"]:
+                    st.markdown("<div style='margin-top: 5px; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.05); border-radius: 8px;'>", unsafe_allow_html=True)
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
                     new_name = c1.text_input("名稱", acc["name"], key=f"c_name_{acc['id']}", label_visibility="collapsed")
                     new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"c_curr_{acc['id']}", label_visibility="collapsed")
@@ -1145,7 +1170,10 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                     if c5.button("取消", key=f"cancel_c_{acc['id']}", use_container_width=True):
                         st.session_state.edit_cash_id = None
                         st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    
                 elif st.session_state.adjust_cash_id == acc["id"]:
+                    st.markdown("<div style='margin-top: 5px; margin-bottom: 10px; padding: 10px; background-color: rgba(255,255,255,0.05); border-radius: 8px;'>", unsafe_allow_html=True)
                     c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2.5, 1, 1])
                     adj_type = c1.selectbox("動作", ["增加", "減少"], key=f"adj_t_{acc['id']}", label_visibility="collapsed")
                     adj_amt = c2.text_input("金額", key=f"adj_a_{acc['id']}", label_visibility="collapsed", placeholder="輸入金額")
@@ -1168,29 +1196,7 @@ def render_cash_manager(unit, display_currency, btc_usd, usd_twd):
                     if c5.button("取消", key=f"cancel_adj_{acc['id']}", use_container_width=True):
                         st.session_state.adjust_cash_id = None
                         st.rerun()
-                else:
-                    c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
-                    bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
-                    
-                    with c_main:
-                        with st.expander(f"🏦 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
-                            render_account_history(acc, "cash")
-
-                    with c_adj:
-                        if st.button("調整", key=f"adj_c_{acc['id']}", use_container_width=True):
-                            st.session_state.adjust_cash_id = acc["id"]
-                            st.rerun()
-                    with c_edit:
-                        if st.button("編輯", key=f"edit_c_{acc['id']}", use_container_width=True):
-                            st.session_state.edit_cash_id = acc["id"]
-                            st.rerun()
-                    with c_del:
-                        if st.button("刪除", key=f"del_c_{acc['id']}", use_container_width=True):
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cash", acc["currency"], -acc["balance"], -acc["balance"])
-                            st.session_state.cash_accounts = [a for a in st.session_state.cash_accounts if a["id"] != acc["id"]]
-                            save_data("cash_accounts", st.session_state.cash_accounts)
-                            st.rerun()
-
+                    st.markdown("</div>", unsafe_allow_html=True)
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
             st.caption("尚無帳戶，請點選右上角新增。")
@@ -1342,7 +1348,33 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                 if "cost" not in acc:
                     acc["cost"] = acc["balance"]
 
+                c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
+                bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
+                cost_str = f"{acc['cost']:,.0f}" if acc['currency'] == "TWD" else f"{acc['cost']:,.2f}"
+                
+                with c_main:
+                    with st.expander(f"📈 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)} (本金: {mask_val(cost_str)})", expanded=False):
+                        render_account_history(acc, "margin")
+
+                with c_adj:
+                    if st.button("調整", key=f"adj_m_{acc['id']}", use_container_width=True):
+                        st.session_state.adjust_margin_id = acc["id"] if st.session_state.get("adjust_margin_id") != acc["id"] else None
+                        st.session_state.edit_margin_id = None
+                        st.rerun()
+                with c_edit:
+                    if st.button("編輯", key=f"edit_m_{acc['id']}", use_container_width=True):
+                        st.session_state.edit_margin_id = acc["id"] if st.session_state.get("edit_margin_id") != acc["id"] else None
+                        st.session_state.adjust_margin_id = None
+                        st.rerun()
+                with c_del:
+                    if st.button("刪除", key=f"del_m_{acc['id']}", use_container_width=True):
+                        apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", acc["currency"], -acc["balance"], -acc["cost"])
+                        st.session_state.margin_accounts = [a for a in st.session_state.margin_accounts if a["id"] != acc["id"]]
+                        save_data("margin_accounts", st.session_state.margin_accounts)
+                        st.rerun()
+
                 if st.session_state.edit_margin_id == acc["id"]:
+                    st.markdown("<div style='margin-top: 5px; margin-bottom: 10px; padding: 15px; background-color: rgba(255,255,255,0.05); border-radius: 8px;'>", unsafe_allow_html=True)
                     c1, c2, c3, c4, c5, c6 = st.columns([2, 1, 1.5, 1.5, 1, 1])
                     new_name = c1.text_input("名稱", acc["name"], key=f"m_name_{acc['id']}", label_visibility="collapsed")
                     new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"m_curr_{acc['id']}", label_visibility="collapsed")
@@ -1368,8 +1400,10 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     if c6.button("取消", key=f"cancel_m_{acc['id']}", use_container_width=True):
                         st.session_state.edit_margin_id = None
                         st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 elif st.session_state.adjust_margin_id == acc["id"]:
+                    st.markdown("<div style='margin-top: 5px; margin-bottom: 10px; padding: 15px; background-color: rgba(255,255,255,0.05); border-radius: 8px;'>", unsafe_allow_html=True)
                     c1, c2, c3, c4, c5 = st.columns([2.5, 1.5, 2.0, 1, 1])
                     adj_type = c1.selectbox("動作類型", ["🎯 更新權益數 (操作損益)", "📥 入金 (增加本金與餘額)", "📤 出金 (減少本金與餘額)"], key=f"adj_tm_{acc['id']}", label_visibility="collapsed")
                     adj_input = c2.text_input("數額", key=f"adj_val_{acc['id']}", label_visibility="collapsed", placeholder="最新權益數或出入金金額")
@@ -1408,29 +1442,7 @@ def render_margin_manager(unit, display_currency, btc_usd, usd_twd):
                     if c5.button("取消", key=f"cancel_adjm_{acc['id']}", use_container_width=True):
                         st.session_state.adjust_margin_id = None
                         st.rerun()
-                else:
-                    c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
-                    bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
-                    cost_str = f"{acc['cost']:,.0f}" if acc['currency'] == "TWD" else f"{acc['cost']:,.2f}"
-                    
-                    with c_main:
-                        with st.expander(f"📈 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)} (本金: {mask_val(cost_str)})", expanded=False):
-                            render_account_history(acc, "margin")
-
-                    with c_adj:
-                        if st.button("調整", key=f"adj_m_{acc['id']}", use_container_width=True):
-                            st.session_state.adjust_margin_id = acc["id"]
-                            st.rerun()
-                    with c_edit:
-                        if st.button("編輯", key=f"edit_m_{acc['id']}", use_container_width=True):
-                            st.session_state.edit_margin_id = acc["id"]
-                            st.rerun()
-                    with c_del:
-                        if st.button("刪除", key=f"del_m_{acc['id']}", use_container_width=True):
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "margin", acc["currency"], -acc["balance"], -acc["cost"])
-                            st.session_state.margin_accounts = [a for a in st.session_state.margin_accounts if a["id"] != acc["id"]]
-                            save_data("margin_accounts", st.session_state.margin_accounts)
-                            st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
@@ -1565,7 +1577,32 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                 if "history" not in acc:
                     acc["history"] = [{"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "建立", "amount": acc["balance"], "note": "系統升級預設"}]
 
+                c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
+                bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
+                
+                with c_main:
+                    with st.expander(f"💳 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
+                        render_account_history(acc, "liabilities")
+
+                with c_adj:
+                    if st.button("調整", key=f"adj_lib_{acc['id']}", use_container_width=True):
+                        st.session_state.adjust_liability_id = acc["id"] if st.session_state.get("adjust_liability_id") != acc["id"] else None
+                        st.session_state.edit_liability_id = None
+                        st.rerun()
+                with c_edit:
+                    if st.button("編輯", key=f"edit_lib_{acc['id']}", use_container_width=True):
+                        st.session_state.edit_liability_id = acc["id"] if st.session_state.get("edit_liability_id") != acc["id"] else None
+                        st.session_state.adjust_liability_id = None
+                        st.rerun()
+                with c_del:
+                    if st.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
+                        apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", acc["currency"], -acc["balance"], 0)
+                        st.session_state.liabilities_accounts = [a for a in st.session_state.liabilities_accounts if a["id"] != acc["id"]]
+                        save_data("liabilities_accounts", st.session_state.liabilities_accounts)
+                        st.rerun()
+
                 if st.session_state.edit_liability_id == acc["id"]:
+                    st.markdown("<div style='margin-top: 5px; margin-bottom: 10px; padding: 15px; background-color: rgba(255,255,255,0.05); border-radius: 8px;'>", unsafe_allow_html=True)
                     c1, c2, c3, c4, c5 = st.columns([2, 1, 2, 1, 1])
                     new_name = c1.text_input("名稱", acc["name"], key=f"lib_name_{acc['id']}", label_visibility="collapsed")
                     new_curr = c2.selectbox("幣別", ["TWD", "USD"], index=0 if acc["currency"]=="TWD" else 1, key=f"lib_curr_{acc['id']}", label_visibility="collapsed")
@@ -1587,7 +1624,10 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     if c5.button("取消", key=f"cancel_lib_{acc['id']}", use_container_width=True):
                         st.session_state.edit_liability_id = None
                         st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+
                 elif st.session_state.adjust_liability_id == acc["id"]:
+                    st.markdown("<div style='margin-top: 5px; margin-bottom: 10px; padding: 15px; background-color: rgba(255,255,255,0.05); border-radius: 8px;'>", unsafe_allow_html=True)
                     c1, c2, c3, c4, c5 = st.columns([1.5, 1.5, 2.5, 1, 1])
                     adj_type = c1.selectbox("動作", ["增加", "減少"], key=f"adj_t_{acc['id']}", label_visibility="collapsed")
                     adj_amt = c2.text_input("金額", key=f"adj_a_{acc['id']}", label_visibility="collapsed", placeholder="輸入金額")
@@ -1610,28 +1650,7 @@ def render_liability_manager(unit, display_currency, total_value, net_value, btc
                     if c5.button("取消", key=f"cancel_adj_{acc['id']}", use_container_width=True):
                         st.session_state.adjust_liability_id = None
                         st.rerun()
-                else:
-                    c_main, c_adj, c_edit, c_del = st.columns([7.5, 0.8, 0.8, 0.8])
-                    bal_str = f"{acc['balance']:,.0f}" if acc['currency'] == "TWD" else f"{acc['balance']:,.2f}"
-                    
-                    with c_main:
-                        with st.expander(f"💳 {acc['name']} ｜ {acc['currency']} {mask_val(bal_str)}", expanded=False):
-                            render_account_history(acc, "liabilities")
-
-                    with c_adj:
-                        if st.button("調整", key=f"adj_lib_{acc['id']}", use_container_width=True):
-                            st.session_state.adjust_liability_id = acc["id"]
-                            st.rerun()
-                    with c_edit:
-                        if st.button("編輯", key=f"edit_lib_{acc['id']}", use_container_width=True):
-                            st.session_state.edit_liability_id = acc["id"]
-                            st.rerun()
-                    with c_del:
-                        if st.button("刪除", key=f"del_lib_{acc['id']}", use_container_width=True):
-                            apply_history_patch(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "liabilities", acc["currency"], -acc["balance"], 0)
-                            st.session_state.liabilities_accounts = [a for a in st.session_state.liabilities_accounts if a["id"] != acc["id"]]
-                            save_data("liabilities_accounts", st.session_state.liabilities_accounts)
-                            st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
         else:
@@ -2140,7 +2159,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                 else:
                     range_y1 = None
 
-                # 🟢 智能 Y 軸：計算圖表二 (價格走勢) 局部的 y_min 與 y_max
                 y_vals2 = []
                 if not hdf.empty: 
                     vis_hdf = hdf[(hdf.index >= sd) & (hdf.index <= end_x)]
@@ -2150,7 +2168,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                     y_vals2.extend(vis_ddf['avg_cost'].dropna().tolist())
                 if not atx_filtered.empty:
                     vis_atx = atx_filtered[(atx_filtered['date_obj'] >= sd) & (atx_filtered['date_obj'] <= end_x)]
-                    # 🟢 修正：排除配息/權利金的總價去干擾 Y 軸範圍
                     valid_prices = vis_atx[~vis_atx['type'].isin(["配息", "Sell Put", "Covered Call"])]
                     y_vals2.extend(valid_prices['price'].dropna().tolist())
 
@@ -2236,7 +2253,6 @@ def render_individual_analysis(transactions, privacy, display_currency, usd_twd,
                         
                         def mk_hover(r): return "＊＊＊＊" if privacy else f"日期: {r['date']}<br>動作: {r['type']}<br>價格: {r['price']}<br>數量: {r['quantity']}<br>備註: {r.get('note', '')}"
                         
-                        # 🟢 零元防呆與配息吸附機制：確保配息/權利金的圖標吸附在當日收盤價或均價上
                         def get_y_pos(d, p, act):
                             if p == 0 or pd.isna(p) or act in ["配息", "Sell Put", "Covered Call"]:
                                 try:
